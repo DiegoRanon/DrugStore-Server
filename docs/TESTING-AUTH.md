@@ -278,6 +278,9 @@ catch { $_.ErrorDetails.Message }
 
 ---
 
-## 8. Not covered yet
+## 8. Related
 
-`npm run verify:auth` is a black-box smoke test, not a regression suite. The Vitest tests PRD §10 calls non-negotiable — org isolation across every endpoint, the order state machine, driver PII serializers — still need writing, and are the first task of Phase 3.
+- [TESTING-ORDERS.md](TESTING-ORDERS.md) — clients, orders, and the state machine (Phase 3)
+- [TESTING-DRIVER.md](TESTING-DRIVER.md) — driver queue, transitions, payment, cooler check, idempotency (Phase 4)
+- `npm test` — the Vitest suite PRD §10 calls non-negotiable: organization isolation across every authenticated route, the full state-machine matrix, and the driver PII serializers. It runs against its own `drugstore_test` database and never touches your development data.
+- `npm run verify` — both black-box HTTP suites in one go.

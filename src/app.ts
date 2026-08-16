@@ -10,8 +10,11 @@ import {
 import { env } from "./config/env.js";
 import { redis } from "./db/redis.js";
 import authRoutes from "./modules/auth/routes.js";
+import clientRoutes from "./modules/clients/routes.js";
+import driverRoutes from "./modules/driver/routes.js";
 import internalRoutes from "./modules/internal/routes.js";
 import inviteRoutes from "./modules/invites/routes.js";
+import orderRoutes from "./modules/orders/routes.js";
 import authPlugin from "./plugins/auth.js";
 import errorHandlerPlugin from "./plugins/errorHandler.js";
 import requestIdPlugin from "./plugins/requestId.js";
@@ -50,7 +53,6 @@ export async function buildApp(): Promise<FastifyInstance> {
     // 1 MB is generous for the largest legitimate payload (a batch of
     // location pings) and bounds memory per request (PRD §8.6).
     bodyLimit: 1_048_576,
-    disableRequestLogging: false,
     trustProxy: true,
   });
 
@@ -97,6 +99,9 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await fastify.register(authRoutes, { prefix: "/v1/auth" });
   await fastify.register(inviteRoutes, { prefix: "/v1/invites" });
+  await fastify.register(clientRoutes, { prefix: "/v1/clients" });
+  await fastify.register(orderRoutes, { prefix: "/v1/orders" });
+  await fastify.register(driverRoutes, { prefix: "/v1/driver" });
   await fastify.register(internalRoutes, { prefix: "/v1/internal" });
 
   return fastify;

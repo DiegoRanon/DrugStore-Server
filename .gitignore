@@ -2,3 +2,9 @@ node_modules/
 .env
 CLAUDE.md
 AGENTS.md
+
+# Build output
+dist/
+
+# Test artifacts
+coverage/

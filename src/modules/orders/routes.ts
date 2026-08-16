@@ -1,0 +1,132 @@
+import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
+import { z } from "zod";
+
+import {
+  assignDriverBodySchema,
+  createOrderBodySchema,
+  listOrdersQuerySchema,
+  orderDetailResponseSchema,
+  orderListResponseSchema,
+  orderResponseSchema,
+  updateOrderBodySchema,
+} from "./schemas.js";
+import { OrdersService } from "./service.js";
+
+/**
+ * Admin-facing order endpoints (PRD §5.2). The driver-facing surface —
+ * queue, pickup, complete, return — is Phase 4 and uses the same state
+ * machine through the same service.
+ */
+const orderRoutes: FastifyPluginAsyncZod = async (fastify) => {
+  fastify.addHook("onRequest", fastify.authenticate);
+  fastify.addHook("preHandler", fastify.requireRole("admin"));
+
+  fastify.post(
+    "/",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Create a delivery, snapshotting client details",
+        body: createOrderBodySchema,
+        response: { 201: orderResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const service = new OrdersService(request.ctx, request.log);
+      const order = await service.create(request.body);
+      return reply.status(201).send(order);
+    },
+  );
+
+  fastify.get(
+    "/",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Logistical history view",
+        querystring: listOrdersQuerySchema,
+        response: { 200: orderListResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.list({
+        date: request.query.date,
+        status: request.query.status,
+        driverId: request.query.driver_id,
+        clientId: request.query.client_id,
+        updatedSince: request.query.updated_since,
+        limit: request.query.limit,
+        cursor: request.query.cursor,
+      });
+    },
+  );
+
+  fastify.get(
+    "/:id",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Order detail with its status timeline",
+        params: z.object({ id: z.string().uuid() }),
+        response: { 200: orderDetailResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.get(request.params.id);
+    },
+  );
+
+  fastify.patch(
+    "/:id",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Edit an order (only while in_pharmacy)",
+        params: z.object({ id: z.string().uuid() }),
+        body: updateOrderBodySchema,
+        response: { 200: orderResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.update(request.params.id, request.body);
+    },
+  );
+
+  fastify.post(
+    "/:id/assign",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Assign or reassign a driver",
+        params: z.object({ id: z.string().uuid() }),
+        body: assignDriverBodySchema,
+        response: { 200: orderResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.assignDriver(request.params.id, request.body.driver_id);
+    },
+  );
+
+  fastify.post(
+    "/:id/cancel",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Cancel an order that never left the pharmacy",
+        params: z.object({ id: z.string().uuid() }),
+        response: { 200: orderResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.cancel(request.params.id);
+    },
+  );
+};
+
+export default orderRoutes;

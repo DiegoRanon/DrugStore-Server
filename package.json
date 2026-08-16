@@ -18,6 +18,9 @@
     "migrate:status": "tsx src/db/migrate.ts status",
     "seed": "tsx src/db/seed.ts",
     "verify:auth": "node scripts/verify-auth.mjs",
+    "verify:orders": "node scripts/verify-orders.mjs",
+    "verify:driver": "node scripts/verify-driver.mjs",
+    "verify": "npm run verify:auth && npm run verify:orders && npm run verify:driver",
     "test": "vitest run",
     "test:watch": "vitest"
   },
