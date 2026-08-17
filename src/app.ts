@@ -1,8 +1,11 @@
 import fastifyCors from "@fastify/cors";
 import fastifyHelmet from "@fastify/helmet";
 import fastifyRateLimit from "@fastify/rate-limit";
+import fastifySwagger from "@fastify/swagger";
+import fastifySwaggerUi from "@fastify/swagger-ui";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
+  jsonSchemaTransform,
   serializerCompiler,
   validatorCompiler,
 } from "fastify-type-provider-zod";
@@ -12,6 +15,7 @@ import { redis } from "./db/redis.js";
 import authRoutes from "./modules/auth/routes.js";
 import clientRoutes from "./modules/clients/routes.js";
 import driverRoutes from "./modules/driver/routes.js";
+import driverRosterRoutes from "./modules/drivers/routes.js";
 import internalRoutes from "./modules/internal/routes.js";
 import inviteRoutes from "./modules/invites/routes.js";
 import orderRoutes from "./modules/orders/routes.js";
@@ -91,9 +95,42 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await fastify.register(authPlugin);
 
+  // Generated from the Zod schemas the routes already declare, so the spec
+  // cannot drift from what the server actually validates. Registered before
+  // the routes because the generator collects them as they are added.
+  await fastify.register(fastifySwagger, {
+    openapi: {
+      info: {
+        title: "Drugstore Delivery API",
+        description:
+          "B2B pharmacy delivery logistics. Carries no medical, pharmaceutical, or prescription data.",
+        version: "1.0.0",
+      },
+      servers: [{ url: env.PUBLIC_BASE_URL }],
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: "http",
+            scheme: "bearer",
+            bearerFormat: "JWT",
+            description: "Access token from POST /v1/auth/login.",
+          },
+        },
+      },
+      security: [{ bearerAuth: [] }],
+    },
+    transform: jsonSchemaTransform,
+  });
+
+  // The spec describes an API over personal information; browsable docs are a
+  // development convenience, not something to expose in production.
+  if (!env.isProduction) {
+    await fastify.register(fastifySwaggerUi, { routePrefix: "/docs" });
+  }
+
   fastify.get(
     "/health",
-    { logLevel: "warn" },
+    { logLevel: "warn", schema: { hide: true } },
     async () => ({ status: "ok", service: "drugstore-server" }),
   );
 
@@ -101,6 +138,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await fastify.register(inviteRoutes, { prefix: "/v1/invites" });
   await fastify.register(clientRoutes, { prefix: "/v1/clients" });
   await fastify.register(orderRoutes, { prefix: "/v1/orders" });
+  await fastify.register(driverRosterRoutes, { prefix: "/v1/drivers" });
   await fastify.register(driverRoutes, { prefix: "/v1/driver" });
   await fastify.register(internalRoutes, { prefix: "/v1/internal" });
 

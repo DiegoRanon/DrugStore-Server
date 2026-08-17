@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 
+import { auditPiiRead } from "../../core/audit.js";
 import type { RequestContext } from "../../core/context.js";
 import { AppError } from "../../core/errors.js";
 import {
@@ -88,12 +89,26 @@ export class ClientsService {
       id: row.id,
     }));
 
+    // Every row carries name, address, and phone_number (§8.4).
+    await auditPiiRead(this.ctx, this.log, {
+      action: "client.list.read",
+      resourceType: "client",
+      recordCount: page.data.length,
+    });
+
     return { ...page, data: page.data.map(toView) };
   }
 
   async get(id: string): Promise<ClientView> {
     const row = await this.repo.findById(id);
     if (!row) throw new AppError("NOT_FOUND", "Client not found");
+
+    await auditPiiRead(this.ctx, this.log, {
+      action: "client.detail.read",
+      resourceType: "client",
+      resourceIds: [row.id],
+    });
+
     return toView(row);
   }
 

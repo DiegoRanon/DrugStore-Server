@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 
+import { auditPiiRead } from "../../core/audit.js";
 import type { RequestContext } from "../../core/context.js";
 import { AppError } from "../../core/errors.js";
 import { buildPage, decodeCursor, type Page } from "../../core/pagination.js";
@@ -152,12 +153,25 @@ export class OrdersService {
       id: row.id,
     }));
 
+    // Every row carries patient_name, address, and phone_number (§8.4).
+    await auditPiiRead(this.ctx, this.log, {
+      action: "order.list.read",
+      resourceType: "order",
+      recordCount: page.data.length,
+    });
+
     return { ...page, data: page.data.map(toAdminOrderView) };
   }
 
   async get(id: string): Promise<OrderDetailView> {
     const row = await this.requireOrder(id);
     const events = await this.repo.listStatusEvents(id);
+
+    await auditPiiRead(this.ctx, this.log, {
+      action: "order.detail.read",
+      resourceType: "order",
+      resourceIds: [row.id],
+    });
 
     return {
       ...toAdminOrderView(row),

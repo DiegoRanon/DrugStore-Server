@@ -20,6 +20,13 @@ import { emailSchema, passwordSchema } from "../auth/schemas.js";
 const internalRoutes: FastifyPluginAsyncZod = async (fastify) => {
   fastify.addHook("onRequest", fastify.requireInternalToken);
 
+  // Kept out of the published OpenAPI spec. Applied to the whole scope rather
+  // than route by route so a future internal endpoint cannot leak into the
+  // document the dashboard team generates its client from.
+  fastify.addHook("onRoute", (routeOptions) => {
+    routeOptions.schema = { ...routeOptions.schema, hide: true };
+  });
+
   fastify.post(
     "/organizations",
     {

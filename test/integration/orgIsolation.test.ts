@@ -86,7 +86,7 @@ describe("cross-organization reads are impossible", () => {
     await seedOrgAOrder();
     await seedOrgAInvite();
 
-    for (const path of ["/v1/orders", "/v1/clients", "/v1/invites"]) {
+    for (const path of ["/v1/orders", "/v1/clients", "/v1/invites", "/v1/drivers"]) {
       const res = await request(app, {
         method: "GET",
         url: path,
@@ -96,12 +96,38 @@ describe("cross-organization reads are impossible", () => {
       const rows = body.data as { id: string }[];
 
       expect(res.statusCode, path).toBe(200);
-      // Org B has exactly its own single client and nothing else.
-      const orgBIds = new Set([world.orgB.clientId]);
+      // Org B has exactly its own single client and single driver.
+      const orgBIds = new Set([world.orgB.clientId, world.orgB.driverId]);
       for (const row of rows) {
         expect(orgBIds.has(row.id), `${path} leaked row ${row.id}`).toBe(true);
       }
     }
+  });
+
+  it("the driver roster excludes the organization's admin", async () => {
+    // The roster is backed by `users`, so the role predicate is what keeps an
+    // admin's own account out of a list of drivers.
+    const res = await request(app, {
+      method: "GET",
+      url: "/v1/drivers",
+      token: world.orgA.adminToken,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const ids = (res.json().data as { id: string }[]).map((d) => d.id);
+    expect(ids).toEqual([world.orgA.driverId]);
+    expect(ids).not.toContain(world.orgA.adminId);
+  });
+
+  it("a driver search cannot be used to reach across organizations", async () => {
+    const res = await request(app, {
+      method: "GET",
+      url: "/v1/drivers?search=alpha",
+      token: world.orgB.adminToken,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toHaveLength(0);
   });
 
   it("a search filter cannot be used to reach across organizations", async () => {
@@ -194,7 +220,12 @@ describe("every authenticated route is scoped", () => {
    */
   const ROUTES: {
     method: "GET" | "POST" | "PATCH" | "DELETE";
-    url: (ids: { orderId: string; clientId: string; inviteId: string }) => string;
+    url: (ids: {
+      orderId: string;
+      clientId: string;
+      inviteId: string;
+      driverId: string;
+    }) => string;
     payload?: unknown;
   }[] = [
     { method: "GET", url: ({ orderId }) => `/v1/orders/${orderId}` },
@@ -212,6 +243,12 @@ describe("every authenticated route is scoped", () => {
     },
     { method: "DELETE", url: ({ clientId }) => `/v1/clients/${clientId}` },
     { method: "DELETE", url: ({ inviteId }) => `/v1/invites/${inviteId}` },
+    { method: "GET", url: ({ driverId }) => `/v1/drivers/${driverId}` },
+    {
+      method: "PATCH",
+      url: ({ driverId }) => `/v1/drivers/${driverId}`,
+      payload: { is_active: false },
+    },
   ];
 
   /**
@@ -243,6 +280,7 @@ describe("every authenticated route is scoped", () => {
       orderId: await seedOrgAOrder(),
       clientId: world.orgA.clientId,
       inviteId: await seedOrgAInvite(),
+      driverId: world.orgA.driverId,
     };
 
     for (const route of ROUTES) {
@@ -266,6 +304,7 @@ describe("every authenticated route is scoped", () => {
       orderId: await seedOrgAOrder(),
       clientId: world.orgA.clientId,
       inviteId: await seedOrgAInvite(),
+      driverId: world.orgA.driverId,
     };
 
     for (const route of ROUTES) {
@@ -355,7 +394,7 @@ describe("every authenticated route is scoped", () => {
 
 describe("role separation", () => {
   it("a driver cannot reach admin surfaces", async () => {
-    for (const path of ["/v1/clients", "/v1/orders", "/v1/invites"]) {
+    for (const path of ["/v1/clients", "/v1/orders", "/v1/invites", "/v1/drivers"]) {
       const res = await request(app, {
         method: "GET",
         url: path,
