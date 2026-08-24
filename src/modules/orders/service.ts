@@ -1,4 +1,5 @@
 import type { FastifyBaseLogger } from "fastify";
+import type { Knex } from "knex";
 
 import { auditPiiRead } from "../../core/audit.js";
 import type { RequestContext } from "../../core/context.js";
@@ -6,10 +7,14 @@ import { AppError } from "../../core/errors.js";
 import { buildPage, decodeCursor, type Page } from "../../core/pagination.js";
 import { db } from "../../db/knex.js";
 import { ClientsRepository } from "../clients/repository.js";
+import { NotificationsService } from "../notifications/service.js";
+import type { DriverNotificationType } from "../notifications/repository.js";
 import {
   OrdersRepository,
   type DeliveryWindow,
+  type OrderPackageRow,
   type OrderRow,
+  type PackageType,
   type PaymentStatus,
 } from "./repository.js";
 import {
@@ -27,17 +32,41 @@ import {
   type TransitionName,
 } from "./stateMachine.js";
 
+export interface OrderPackageInput {
+  label_code: string;
+  package_type?: PackageType;
+}
+
 export interface CreateOrderInput {
   client_id: string;
   driver_id?: string | null;
   patient_name?: string;
   address?: string;
   phone_number?: string;
+  authorized_recipient?: string | null;
   delivery_date: string;
   delivery_window: DeliveryWindow;
+  requested_delivery_time?: string | null;
   payment_status?: PaymentStatus;
   amount_due?: number | null;
   requires_cooler_bag?: boolean;
+  is_priority?: boolean;
+  packages?: OrderPackageInput[];
+}
+
+export interface UpdateOrderInput {
+  patient_name?: string;
+  address?: string;
+  phone_number?: string;
+  authorized_recipient?: string | null;
+  delivery_date?: string;
+  delivery_window?: DeliveryWindow;
+  requested_delivery_time?: string | null;
+  payment_status?: PaymentStatus;
+  amount_due?: number | null;
+  requires_cooler_bag?: boolean;
+  is_priority?: boolean;
+  packages?: OrderPackageInput[];
 }
 
 export interface OrderDetailView extends AdminOrderView {
@@ -45,9 +74,23 @@ export interface OrderDetailView extends AdminOrderView {
   available_transitions: TransitionName[];
 }
 
+export interface CalendarView {
+  from: string;
+  to: string;
+  days: {
+    delivery_date: string;
+    total: number;
+    by_status: Partial<Record<OrderStatus, number>>;
+  }[];
+}
+
+/** Statuses during which an admin may still edit the order's details. */
+const EDITABLE_STATUSES: readonly OrderStatus[] = ["scheduled", "in_pharmacy"];
+
 export class OrdersService {
   private readonly repo: OrdersRepository;
   private readonly clients: ClientsRepository;
+  private readonly notifications: NotificationsService;
 
   constructor(
     private readonly ctx: RequestContext,
@@ -55,13 +98,21 @@ export class OrdersService {
   ) {
     this.repo = new OrdersRepository(ctx);
     this.clients = new ClientsRepository(ctx);
+    this.notifications = new NotificationsService(ctx, log);
   }
 
   // --- creation ------------------------------------------------------------
 
   /**
-   * Creates an order, snapshotting the client's logistics details onto it
-   * (PRD §5.2).
+   * Creates an order in the admin's calendar, snapshotting the client's
+   * logistics details onto it (PRD §5.2).
+   *
+   * It starts "scheduled", not "in_pharmacy": the pharmacy takes the order by
+   * phone or in person days ahead, and the bags do not exist yet. Staff call
+   * markReady() on the day, once they have physically packed it. Until then
+   * the order is admin-only — a driver cannot see it, and the repository cuts
+   * scheduled rows out of every driver query rather than relying on the state
+   * machine to refuse a pickup.
    *
    * The snapshot is written once, here. There is deliberately no code path
    * anywhere that copies a client's current details onto an existing order —
@@ -89,8 +140,11 @@ export class OrdersService {
       }
     }
 
-    const row = await db.transaction(async (trx) => {
-      const created = await this.repo.create(
+    const packages = input.packages ?? [];
+
+    const { row, packageRows } = await db.transaction(async (trx) => {
+      const repo = new OrdersRepository(this.ctx, trx);
+      const created = await repo.create(
         {
           client_id: client.id,
           driver_id: input.driver_id ?? null,
@@ -99,14 +153,23 @@ export class OrdersService {
           patient_name: input.patient_name ?? client.name,
           address: input.address ?? client.address,
           phone_number: input.phone_number ?? client.phone_number,
+          authorized_recipient: input.authorized_recipient ?? null,
           delivery_date: input.delivery_date,
           delivery_window: input.delivery_window,
+          requested_delivery_time: input.requested_delivery_time ?? null,
           payment_status: input.payment_status ?? "unpaid",
           amount_due: input.amount_due ?? null,
-          requires_cooler_bag: input.requires_cooler_bag ?? false,
+          requires_cooler_bag: coolerBagRequired(
+            input.requires_cooler_bag,
+            packages,
+          ),
+          is_priority: input.is_priority ?? false,
+          status: "scheduled",
         },
         trx,
       );
+
+      const inserted = await repo.replacePackages(trx, created.id, packages);
 
       // The creation event, so order_status_events is a complete history
       // rather than one that starts at the first change.
@@ -116,33 +179,43 @@ export class OrdersService {
         changed_by_user_id: this.ctx.userId,
       });
 
-      return created;
+      return { row: created, packageRows: inserted };
     });
 
     this.log.info(
-      { order_id: row.id, client_id: client.id },
+      {
+        order_id: row.id,
+        client_id: client.id,
+        package_count: packageRows.length,
+      },
       "order created",
     );
 
-    return toAdminOrderView(row);
+    return toAdminOrderView(row, packageRows);
   }
 
   // --- reads ---------------------------------------------------------------
 
   async list(options: {
     date?: string;
+    from?: string;
+    to?: string;
     status?: OrderStatus;
     driverId?: string;
     clientId?: string;
+    isPriority?: boolean;
     updatedSince?: Date;
     limit: number;
     cursor?: string;
   }): Promise<Page<AdminOrderView>> {
     const rows = await this.repo.list({
       date: options.date,
+      from: options.from,
+      to: options.to,
       status: options.status,
       driverId: options.driverId,
       clientId: options.clientId,
+      isPriority: options.isPriority,
       updatedSince: options.updatedSince,
       limit: options.limit,
       cursor: options.cursor ? decodeCursor(options.cursor) : undefined,
@@ -153,6 +226,10 @@ export class OrdersService {
       id: row.id,
     }));
 
+    const packages = await this.repo.listPackagesForOrders(
+      page.data.map((row) => row.id),
+    );
+
     // Every row carries patient_name, address, and phone_number (§8.4).
     await auditPiiRead(this.ctx, this.log, {
       action: "order.list.read",
@@ -160,12 +237,44 @@ export class OrdersService {
       recordCount: page.data.length,
     });
 
-    return { ...page, data: page.data.map(toAdminOrderView) };
+    return {
+      ...page,
+      data: page.data.map((row) =>
+        toAdminOrderView(row, packages.get(row.id) ?? []),
+      ),
+    };
+  }
+
+  /**
+   * Per-day counts for the admin calendar.
+   *
+   * Deliberately not audit-logged: it returns integers, not a single patient
+   * detail, and recording it as a PII read would bury the real accesses in
+   * noise every time somebody pages through a month.
+   */
+  async calendar(range: { from: string; to: string }): Promise<CalendarView> {
+    const counts = await this.repo.countByDate(range);
+
+    const byDate = new Map<string, CalendarView["days"][number]>();
+    for (const entry of counts) {
+      let day = byDate.get(entry.delivery_date);
+      if (!day) {
+        day = { delivery_date: entry.delivery_date, total: 0, by_status: {} };
+        byDate.set(entry.delivery_date, day);
+      }
+      day.by_status[entry.status] = entry.count;
+      day.total += entry.count;
+    }
+
+    return { from: range.from, to: range.to, days: [...byDate.values()] };
   }
 
   async get(id: string): Promise<OrderDetailView> {
     const row = await this.requireOrder(id);
-    const events = await this.repo.listStatusEvents(id);
+    const [events, packages] = await Promise.all([
+      this.repo.listStatusEvents(id),
+      this.repo.listPackages(id),
+    ]);
 
     await auditPiiRead(this.ctx, this.log, {
       action: "order.detail.read",
@@ -174,7 +283,7 @@ export class OrdersService {
     });
 
     return {
-      ...toAdminOrderView(row),
+      ...toAdminOrderView(row, packages),
       status_events: events.map(toStatusEventView),
       available_transitions: availableTransitions(row.status),
     };
@@ -189,41 +298,60 @@ export class OrdersService {
   // --- edits ---------------------------------------------------------------
 
   /**
-   * Editable only while the order is still at the pharmacy (PRD §5.2). Once a
-   * driver holds the package, changing the address would mean the delivery
-   * they are performing no longer matches the record of it.
+   * Editable only while the order is still at the pharmacy — scheduled in the
+   * calendar, or packed and waiting on the counter. Once a driver holds the
+   * package, changing the address would mean the delivery they are performing
+   * no longer matches the record of it.
    */
-  async update(
-    id: string,
-    patch: {
-      patient_name?: string;
-      address?: string;
-      phone_number?: string;
-      delivery_date?: string;
-      delivery_window?: DeliveryWindow;
-      payment_status?: PaymentStatus;
-      amount_due?: number | null;
-      requires_cooler_bag?: boolean;
-    },
-  ): Promise<AdminOrderView> {
+  async update(id: string, patch: UpdateOrderInput): Promise<AdminOrderView> {
     const existing = await this.requireOrder(id);
 
-    if (existing.status !== "in_pharmacy") {
+    if (!EDITABLE_STATUSES.includes(existing.status)) {
       throw new AppError(
         "ORDER_NOT_EDITABLE",
-        `An order can only be edited while it is in_pharmacy (this one is ${existing.status})`,
-        { current_status: existing.status },
+        `An order can only be edited before a driver takes it (this one is ${existing.status})`,
+        {
+          current_status: existing.status,
+          editable_statuses: EDITABLE_STATUSES,
+        },
       );
     }
 
-    const row = await this.repo.update(id, patch);
-    if (!row) throw new AppError("NOT_FOUND", "Order not found");
-    return toAdminOrderView(row);
+    const { packages, ...columns } = patch;
+
+    const result = await db.transaction(async (trx) => {
+      const repo = new OrdersRepository(this.ctx, trx);
+
+      const packageRows = packages
+        ? await repo.replacePackages(trx, id, packages)
+        : await repo.listPackages(id);
+
+      const columnPatch: Partial<OrderRow> = { ...columns };
+      if (packages) {
+        // Kept in step so the cooler-bag check cannot disagree with what is
+        // actually in the bags.
+        columnPatch.requires_cooler_bag = coolerBagRequired(
+          patch.requires_cooler_bag ?? existing.requires_cooler_bag,
+          packages,
+        );
+      }
+
+      const row =
+        Object.keys(columnPatch).length > 0
+          ? await repo.update(id, columnPatch, trx)
+          : existing;
+
+      if (!row) throw new AppError("NOT_FOUND", "Order not found");
+      return { row, packageRows };
+    });
+
+    return toAdminOrderView(result.row, result.packageRows);
   }
 
   /**
    * Assign or reassign a driver. Allowed at any non-terminal point, since
-   * reassignment mid-route is a real dispatch need (PRD §12 Q6).
+   * reassignment mid-route is a real dispatch need (PRD §12 Q6), and from
+   * "scheduled" so dispatch can plan tomorrow's run in the calendar.
    */
   async assignDriver(
     id: string,
@@ -266,7 +394,43 @@ export class OrdersService {
       "order driver assignment changed",
     );
 
-    return toAdminOrderView(row);
+    // Only once the order is on the counter is there anything for a driver to
+    // act on. A reassignment inside the calendar is dispatch housekeeping and
+    // would just be noise in the feed.
+    if (existing.status === "in_pharmacy") {
+      if (existing.driver_id && existing.driver_id !== driverId) {
+        await this.notify(existing.driver_id, row, "order_unassigned");
+      }
+      if (driverId && driverId !== existing.driver_id) {
+        await this.notify(driverId, row, "order_assigned");
+      }
+    }
+
+    return this.withPackages(row);
+  }
+
+  /** Driver-settable, because the employee flags it verbally at pickup. */
+  async setPriority(
+    id: string,
+    isPriority: boolean,
+  ): Promise<AdminOrderView> {
+    const existing = await this.requireOrder(id);
+
+    if (isTerminal(existing.status)) {
+      throw new AppError(
+        "ORDER_ALREADY_TERMINAL",
+        `Cannot change the priority of an order that is ${existing.status}`,
+        { current_status: existing.status },
+      );
+    }
+
+    const row = await this.repo.setPriority(id, isPriority);
+    if (!row) throw new AppError("NOT_FOUND", "Order not found");
+    return this.withPackages(row);
+  }
+
+  private async withPackages(row: OrderRow): Promise<AdminOrderView> {
+    return toAdminOrderView(row, await this.repo.listPackages(row.id));
   }
 
   // --- state machine -------------------------------------------------------
@@ -276,17 +440,20 @@ export class OrdersService {
    *
    * Everything happens in one transaction: the row is locked, the transition
    * is validated against the current status, then the status, its timestamp,
-   * and the audit event are written together. A caller cannot produce a
-   * status without its timestamp or a change without its event.
+   * any outcome data, and the audit event are written together. A caller
+   * cannot produce a status without its timestamp or a change without its
+   * event.
    */
   async transitionRow(
     orderId: string,
     transitionName: TransitionName,
+    options: { patch?: Partial<OrderRow>; trx?: Knex.Transaction } = {},
   ): Promise<OrderRow> {
     const definition = TRANSITIONS[transitionName];
 
-    const row = await db.transaction(async (trx) => {
-      const order = await this.repo.findByIdForUpdate(orderId, trx);
+    const run = async (trx: Knex.Transaction): Promise<OrderRow> => {
+      const repo = new OrdersRepository(this.ctx, trx);
+      const order = await repo.findByIdForUpdate(orderId, trx);
       if (!order) throw new AppError("NOT_FOUND", "Order not found");
 
       assertTransitionAllowed({
@@ -297,13 +464,34 @@ export class OrdersService {
         assignedDriverId: order.driver_id,
       });
 
-      return this.repo.applyTransition(trx, {
+      // Enforced here rather than only in the route body schema, so that any
+      // caller reaching the state machine gets the documented 422 instead of a
+      // raw chk_failure_reason_present violation surfacing as a 500.
+      if (
+        definition.to === "returned" &&
+        !options.patch?.failure_reason &&
+        !order.failure_reason
+      ) {
+        throw new AppError(
+          "FAILURE_REASON_REQUIRED",
+          "A failed delivery must record why it failed",
+        );
+      }
+
+      return repo.applyTransition(trx, {
         orderId,
         status: definition.to,
         timestampColumn: definition.timestampColumn,
         changedByUserId: this.ctx.userId,
+        patch: options.patch,
       });
-    });
+    };
+
+    // Callers that already hold a transaction — the batch handover — pass it
+    // in so the whole batch commits or rolls back together.
+    const row = options.trx
+      ? await run(options.trx)
+      : await db.transaction(run);
 
     this.log.info(
       {
@@ -319,18 +507,66 @@ export class OrdersService {
   }
 
   /**
-   * Admin-facing wrapper. Driver routes call `transitionRow` and apply the
+   * Admin-facing wrapper. Driver routes call transitionRow and apply the
    * driver serializer instead, so the same state machine serves both without
    * either context borrowing the other's response shape.
    */
   async transition(
     orderId: string,
     transitionName: TransitionName,
+    options: { patch?: Partial<OrderRow> } = {},
   ): Promise<AdminOrderView> {
-    return toAdminOrderView(await this.transitionRow(orderId, transitionName));
+    return this.withPackages(
+      await this.transitionRow(orderId, transitionName, options),
+    );
   }
 
-  cancel(orderId: string): Promise<AdminOrderView> {
-    return this.transition(orderId, "cancel");
+  /**
+   * Staff have physically prepared the order (domain workflow: "les employés
+   * préparent physiquement la commande et la déclare comme prête à être prise
+   * en charge"). This is the moment it becomes visible to its driver.
+   */
+  async markReady(orderId: string): Promise<AdminOrderView> {
+    const row = await this.transitionRow(orderId, "mark_ready");
+    if (row.driver_id) {
+      await this.notify(row.driver_id, row, "order_ready");
+    }
+    return this.withPackages(row);
   }
+
+  async cancel(orderId: string): Promise<AdminOrderView> {
+    const row = await this.transitionRow(orderId, "cancel");
+    if (row.driver_id) {
+      await this.notify(row.driver_id, row, "order_cancelled");
+    }
+    return this.withPackages(row);
+  }
+
+  private notify(
+    driverId: string,
+    row: OrderRow,
+    type: DriverNotificationType,
+  ): Promise<void> {
+    return this.notifications.emit({
+      driverId,
+      orderId: row.id,
+      type,
+      deliveryDate: row.delivery_date,
+    });
+  }
+}
+
+/**
+ * A cooler in the bags means the order needs a cooler bag, whatever the flag
+ * said. The explicit flag still wins upward — an admin can require one before
+ * the packages are entered — but adding a cooler package can never leave the
+ * order marked as not needing one.
+ */
+function coolerBagRequired(
+  explicit: boolean | undefined,
+  packages: OrderPackageInput[],
+): boolean {
+  return (
+    (explicit ?? false) || packages.some((p) => p.package_type === "cooler")
+  );
 }

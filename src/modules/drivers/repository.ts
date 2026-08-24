@@ -2,6 +2,7 @@ import type { Knex } from "knex";
 
 import type { Cursor } from "../../core/pagination.js";
 import { OrgScopedRepository } from "../../core/repository.js";
+import { TERMINAL_STATUSES } from "../orders/stateMachine.js";
 
 export interface DriverRow {
   id: string;
@@ -115,11 +116,18 @@ export class DriversRepository extends OrgScopedRepository {
     return row;
   }
 
-  /** Active-order count, surfaced when deactivating so work is not stranded. */
+  /**
+   * Open-order count, surfaced when deactivating so work is not stranded.
+   *
+   * Every non-terminal status counts, not just the two active ones. A driver
+   * being deactivated may be holding an undelivered package that still has to
+   * get back to the pharmacy, and a pre-assigned order sitting in tomorrow's
+   * calendar still needs somebody else to take it.
+   */
   async countActiveOrders(driverId: string): Promise<number> {
     const row = await this.runner("orders")
       .where({ organization_id: this.organizationId, driver_id: driverId })
-      .whereIn("status", ["in_pharmacy", "picked_up"])
+      .whereNotIn("status", [...TERMINAL_STATUSES])
       .count<{ count: string }>("* as count")
       .first();
     return Number(row?.count ?? 0);

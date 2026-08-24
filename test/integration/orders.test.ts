@@ -7,6 +7,7 @@ import { OrdersService } from "../../src/modules/orders/service.js";
 import {
   createTestApp,
   createWorld,
+  markReady,
   request,
   type TestWorld,
 } from "../helpers/fixtures.js";
@@ -30,7 +31,16 @@ beforeEach(async () => {
 
 const DELIVERY = { delivery_date: "2026-09-01", delivery_window: "AM" } as const;
 
-async function createOrder(overrides: Record<string, unknown> = {}) {
+/**
+ * Creates an order and declares it ready by default.
+ *
+ * Orders are born "scheduled" in the admin calendar; pass { ready: false } to
+ * work with one at that stage. The lifecycle suite covers the stage itself.
+ */
+async function createOrder(
+  overrides: Record<string, unknown> = {},
+  options: { ready?: boolean } = {},
+) {
   const res = await request(app, {
     method: "POST",
     url: "/v1/orders",
@@ -38,7 +48,10 @@ async function createOrder(overrides: Record<string, unknown> = {}) {
     payload: { client_id: world.orgA.clientId, ...DELIVERY, ...overrides },
   });
   expect(res.statusCode).toBe(201);
-  return res.json();
+  const order = res.json();
+
+  if (options.ready === false) return order;
+  return markReady(app, world.orgA.adminToken, order.id);
 }
 
 /** Drives a transition through the service, as the driver routes will in Phase 4. */
@@ -107,8 +120,10 @@ describe("order creation and client snapshotting (PRD §5.2)", () => {
       token: world.orgA.adminToken,
     });
 
-    expect(detail.json().status_events).toHaveLength(1);
-    expect(detail.json().status_events[0].status).toBe("in_pharmacy");
+    // Two, because the helper also declares it ready: the calendar entry and
+    // the moment staff put the bags on the counter are both real events.
+    expect(detail.json().status_events.map((e: { status: string }) => e.status))
+      .toEqual(["scheduled", "in_pharmacy"]);
   });
 
   it("refuses to create a delivery for a deactivated client", async () => {
@@ -159,13 +174,50 @@ describe("the state machine against the database (PRD §5.3)", () => {
     const service = driverService();
 
     await service.transition(order.id, "pickup");
-    const returned = await service.transition(order.id, "return");
+    const returned = await service.transition(order.id, "return", {
+      patch: { failure_reason: "customer_absent" },
+    });
 
     expect(returned.status).toBe("returned");
     expect(returned.returned_at).not.toBeNull();
-    // §5.3: nothing was collected, so the order stays unpaid.
+    expect(returned.failure_reason).toBe("customer_absent");
+    // A return is not the end: the package still has to get back to the
+    // pharmacy, so it is not terminal and the handover is still owed.
+    expect(returned.returned_to_pharmacy_at).toBeNull();
+    // Nothing was collected, so the order stays unpaid.
     expect(returned.payment_status).toBe("unpaid");
     expect(returned.payment_collected).toBe(false);
+  });
+
+  it("refuses a return that does not say why it failed", async () => {
+    // The state machine enforces this, not just the route body schema, so a
+    // caller reaching the service directly gets the documented 422 rather than
+    // a raw chk_failure_reason_present violation surfacing as a 500.
+    const order = await createOrder({ driver_id: world.orgA.driverId });
+    const service = driverService();
+    await service.transition(order.id, "pickup");
+
+    await expect(service.transition(order.id, "return")).rejects.toMatchObject({
+      code: "FAILURE_REASON_REQUIRED",
+      statusCode: 422,
+    });
+  });
+
+  it("walks returned -> returned_to_pharmacy on the handover", async () => {
+    const order = await createOrder({ driver_id: world.orgA.driverId });
+    const service = driverService();
+
+    await service.transition(order.id, "pickup");
+    await service.transition(order.id, "return", {
+      patch: { failure_reason: "customer_refused" },
+    });
+    const handed = await service.transition(order.id, "handover");
+
+    expect(handed.status).toBe("returned_to_pharmacy");
+    expect(handed.returned_to_pharmacy_at).not.toBeNull();
+    // The original failure survives the handover — it is why the package came
+    // back, and the pharmacy needs it to decide whether to re-attempt.
+    expect(handed.failure_reason).toBe("customer_refused");
   });
 
   it("writes a status event for every transition, in the same transaction", async () => {
@@ -179,6 +231,7 @@ describe("the state machine against the database (PRD §5.3)", () => {
       .orderBy("occurred_at", "asc");
 
     expect(events.map((e) => e.status)).toEqual([
+      "scheduled",
       "in_pharmacy",
       "picked_up",
       "completed",

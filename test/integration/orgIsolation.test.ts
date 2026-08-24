@@ -183,7 +183,7 @@ describe("cross-organization writes are impossible", () => {
     expect(res.statusCode).toBe(404);
 
     const row = await db("orders").where({ id: orderId }).first();
-    expect(row.status).toBe("in_pharmacy");
+    expect(row.status).toBe("scheduled");
   });
 
   it("an admin cannot deactivate another organization's client", async () => {
@@ -234,6 +234,17 @@ describe("every authenticated route is scoped", () => {
       url: ({ orderId }) => `/v1/orders/${orderId}`,
       payload: { delivery_window: "PM" },
     },
+    { method: "POST", url: ({ orderId }) => `/v1/orders/${orderId}/ready` },
+    {
+      method: "POST",
+      url: ({ orderId }) => `/v1/orders/${orderId}/assign`,
+      payload: { driver_id: null },
+    },
+    {
+      method: "POST",
+      url: ({ orderId }) => `/v1/orders/${orderId}/priority`,
+      payload: { is_priority: true },
+    },
     { method: "POST", url: ({ orderId }) => `/v1/orders/${orderId}/cancel` },
     { method: "GET", url: ({ clientId }) => `/v1/clients/${clientId}` },
     {
@@ -262,7 +273,20 @@ describe("every authenticated route is scoped", () => {
   }[] = [
     { method: "POST", url: ({ orderId }) => `/v1/driver/orders/${orderId}/pickup` },
     { method: "POST", url: ({ orderId }) => `/v1/driver/orders/${orderId}/complete` },
-    { method: "POST", url: ({ orderId }) => `/v1/driver/orders/${orderId}/return` },
+    {
+      method: "POST",
+      url: ({ orderId }) => `/v1/driver/orders/${orderId}/return`,
+      payload: { reason: "customer_absent" },
+    },
+    {
+      method: "POST",
+      url: ({ orderId }) => `/v1/driver/orders/${orderId}/handover`,
+    },
+    {
+      method: "POST",
+      url: ({ orderId }) => `/v1/driver/orders/${orderId}/priority`,
+      payload: { is_priority: true },
+    },
     {
       method: "POST",
       url: ({ orderId }) => `/v1/driver/orders/${orderId}/payment`,
@@ -323,7 +347,14 @@ describe("every authenticated route is scoped", () => {
     const orderId = await seedOrgAOrder();
     await db("orders")
       .where({ id: orderId })
-      .update({ driver_id: world.orgA.driverId, status: "picked_up", picked_up_at: new Date() });
+      .update({
+        driver_id: world.orgA.driverId,
+        status: "picked_up",
+        // ready_at as well: chk_status_stage_timestamp requires every status
+        // past the calendar to record when staff declared it prepared.
+        ready_at: new Date(),
+        picked_up_at: new Date(),
+      });
 
     for (const route of DRIVER_ROUTES) {
       const url = route.url({ orderId });
@@ -344,7 +375,14 @@ describe("every authenticated route is scoped", () => {
     const orderId = await seedOrgAOrder();
     await db("orders")
       .where({ id: orderId })
-      .update({ driver_id: world.orgA.driverId, status: "picked_up", picked_up_at: new Date() });
+      .update({
+        driver_id: world.orgA.driverId,
+        status: "picked_up",
+        // ready_at as well: chk_status_stage_timestamp requires every status
+        // past the calendar to record when staff declared it prepared.
+        ready_at: new Date(),
+        picked_up_at: new Date(),
+      });
 
     const [colleague] = await db("users")
       .insert({

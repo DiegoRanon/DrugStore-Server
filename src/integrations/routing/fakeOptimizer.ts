@@ -1,4 +1,5 @@
 import type {
+  EstimateResult,
   OptimizeRequest,
   OptimizeResult,
   RouteOptimizer,
@@ -25,6 +26,23 @@ export class FakeOptimizer implements RouteOptimizer {
       provider: this.name,
     };
   }
+
+  /**
+   * No geocoder, so no distances. Reported as degraded and null rather than
+   * invented: the driver is using these numbers to pick a route, and a made-up
+   * kilometre reading would send them the wrong way with confidence.
+   */
+  async estimate(request: OptimizeRequest): Promise<EstimateResult> {
+    return {
+      estimates: request.stops.map((stop) => ({
+        orderId: stop.orderId,
+        distanceMeters: null,
+        durationSeconds: null,
+      })),
+      degraded: true,
+      provider: this.name,
+    };
+  }
 }
 
 /**
@@ -35,6 +53,10 @@ export class FailingOptimizer implements RouteOptimizer {
   readonly name = "failing";
 
   async optimize(): Promise<OptimizeResult> {
+    throw new Error("route optimizer unavailable");
+  }
+
+  async estimate(): Promise<EstimateResult> {
     throw new Error("route optimizer unavailable");
   }
 }

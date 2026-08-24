@@ -151,7 +151,11 @@ check("a driver cannot read the roster", asDriver.status === 403);
 // accepted by the assign endpoint.
 section("Roster feeds the assign dropdown");
 
-const clientsRes = await call("GET", "/v1/clients?limit=1", { token: tokenA });
+// is_active=true, because the earlier verify scripts soft-delete clients and
+// an inactive one cannot take a new delivery.
+const clientsRes = await call("GET", "/v1/clients?limit=1&is_active=true", {
+  token: tokenA,
+});
 const clientId = clientsRes.body?.data?.[0]?.id;
 
 const order = await call("POST", "/v1/orders", {

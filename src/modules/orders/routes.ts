@@ -3,19 +3,22 @@ import { z } from "zod";
 
 import {
   assignDriverBodySchema,
+  calendarQuerySchema,
+  calendarResponseSchema,
   createOrderBodySchema,
   listOrdersQuerySchema,
   orderDetailResponseSchema,
   orderListResponseSchema,
   orderResponseSchema,
+  setPriorityBodySchema,
   updateOrderBodySchema,
 } from "./schemas.js";
 import { OrdersService } from "./service.js";
 
 /**
- * Admin-facing order endpoints (PRD §5.2). The driver-facing surface —
- * queue, pickup, complete, return — is Phase 4 and uses the same state
- * machine through the same service.
+ * Admin-facing order endpoints (PRD §5.2). The driver-facing surface — queue,
+ * pickup, complete, return, handover — lives in ../driver and drives the same
+ * state machine through the same service.
  */
 const orderRoutes: FastifyPluginAsyncZod = async (fastify) => {
   fastify.addHook("onRequest", fastify.authenticate);
@@ -26,7 +29,9 @@ const orderRoutes: FastifyPluginAsyncZod = async (fastify) => {
     {
       schema: {
         tags: ["orders"],
-        summary: "Create a delivery, snapshotting client details",
+        summary: "Schedule a delivery, snapshotting client details",
+        description:
+          "Creates the order in the admin calendar with status 'scheduled'. It is invisible to drivers until staff call POST /v1/orders/{id}/ready.",
         body: createOrderBodySchema,
         response: { 201: orderResponseSchema },
       },
@@ -52,12 +57,38 @@ const orderRoutes: FastifyPluginAsyncZod = async (fastify) => {
       const service = new OrdersService(request.ctx, request.log);
       return service.list({
         date: request.query.date,
+        from: request.query.from,
+        to: request.query.to,
         status: request.query.status,
         driverId: request.query.driver_id,
         clientId: request.query.client_id,
+        isPriority: request.query.is_priority,
         updatedSince: request.query.updated_since,
         limit: request.query.limit,
         cursor: request.query.cursor,
+      });
+    },
+  );
+
+  // Registered before /:id so the intent is obvious to a reader; Fastify would
+  // prefer the static segment regardless.
+  fastify.get(
+    "/calendar",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Per-day order counts for the admin calendar",
+        description:
+          "Counts only — no patient details are returned, and this read is not audit-logged.",
+        querystring: calendarQuerySchema,
+        response: { 200: calendarResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.calendar({
+        from: request.query.from,
+        to: request.query.to,
       });
     },
   );
@@ -83,7 +114,7 @@ const orderRoutes: FastifyPluginAsyncZod = async (fastify) => {
     {
       schema: {
         tags: ["orders"],
-        summary: "Edit an order (only while in_pharmacy)",
+        summary: "Edit an order (only while scheduled or in_pharmacy)",
         params: z.object({ id: z.string().uuid() }),
         body: updateOrderBodySchema,
         response: { 200: orderResponseSchema },
@@ -92,6 +123,24 @@ const orderRoutes: FastifyPluginAsyncZod = async (fastify) => {
     async (request) => {
       const service = new OrdersService(request.ctx, request.log);
       return service.update(request.params.id, request.body);
+    },
+  );
+
+  fastify.post(
+    "/:id/ready",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Declare the order physically prepared and ready for pickup",
+        description:
+          "Moves the order out of the calendar and onto the counter. Notifies the assigned driver, if there is one.",
+        params: z.object({ id: z.string().uuid() }),
+        response: { 200: orderResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.markReady(request.params.id);
     },
   );
 
@@ -109,6 +158,23 @@ const orderRoutes: FastifyPluginAsyncZod = async (fastify) => {
     async (request) => {
       const service = new OrdersService(request.ctx, request.log);
       return service.assignDriver(request.params.id, request.body.driver_id);
+    },
+  );
+
+  fastify.post(
+    "/:id/priority",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Flag or unflag an order as a priority stop",
+        params: z.object({ id: z.string().uuid() }),
+        body: setPriorityBodySchema,
+        response: { 200: orderResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.setPriority(request.params.id, request.body.is_priority);
     },
   );
 

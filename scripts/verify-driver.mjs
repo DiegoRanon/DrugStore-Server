@@ -140,7 +140,13 @@ async function newOrder(overrides = {}) {
       ...overrides,
     },
   });
-  return res.body;
+
+  // Orders are created into the admin calendar. Staff declare them ready once
+  // the bags are physically packed, and only then does a driver see them.
+  const ready = await call("POST", `/v1/orders/${res.body?.id}/ready`, {
+    token: adminToken,
+  });
+  return ready.body;
 }
 
 // --- queue -----------------------------------------------------------------
@@ -305,6 +311,7 @@ section("Returning an undeliverable order (PRD §5.3)");
 
 const earlyReturn = await call("POST", `/v1/driver/orders/${returnOrder.id}/return`, {
   token: driverToken,
+  body: { reason: "customer_absent" },
 });
 check(
   "cannot return an order still at the pharmacy (that is a cancellation)",
@@ -313,12 +320,44 @@ check(
 );
 
 await call("POST", `/v1/driver/orders/${returnOrder.id}/pickup`, { token: driverToken });
+const noReason = await call("POST", `/v1/driver/orders/${returnOrder.id}/return`, {
+  token: driverToken,
+  body: {},
+});
+check(
+  "a failed delivery must say why it failed",
+  noReason.status === 400,
+  JSON.stringify(noReason.body),
+);
+
 const returned = await call("POST", `/v1/driver/orders/${returnOrder.id}/return`, {
   token: driverToken,
+  body: { reason: "customer_absent", note: "Buzzed twice, no answer" },
 });
 check("return succeeds from picked_up", returned.status === 200 && returned.body?.status === "returned");
 check("return stamps returned_at", Boolean(returned.body?.returned_at));
+check("return records the reason", returned.body?.failure_reason === "customer_absent");
 check("return strips patient details as well", !("address" in (returned.body ?? {})));
+check(
+  "the driver's own note does not come back to the device",
+  !JSON.stringify(returned.body ?? {}).includes("Buzzed twice"),
+);
+check(
+  "a return is NOT terminal — the handover is still owed",
+  returned.body?.returned_to_pharmacy_at === null,
+  JSON.stringify(returned.body?.returned_to_pharmacy_at),
+);
+
+const returnQueue = await call("GET", `/v1/driver/queue?date=${DATE}`, { token: driverToken });
+check(
+  "the returned package sits in to_return, not closed",
+  returnQueue.body?.to_return?.some((s) => s.id === returnOrder.id) &&
+    !returnQueue.body?.closed?.some((s) => s.id === returnOrder.id),
+  JSON.stringify({
+    to_return: returnQueue.body?.to_return?.length,
+    closed: returnQueue.body?.closed?.length,
+  }),
+);
 
 const returnAdmin = await call("GET", `/v1/orders/${returnOrder.id}`, { token: adminToken });
 check(
@@ -432,7 +471,9 @@ const stranded = await newOrder({ address: "500 Elm St" });
 for (const [label, path, body] of [
   ["pickup", `/v1/driver/orders/${stranded.id}/pickup`, undefined],
   ["complete", `/v1/driver/orders/${stranded.id}/complete`, undefined],
-  ["return", `/v1/driver/orders/${stranded.id}/return`, undefined],
+  ["return", `/v1/driver/orders/${stranded.id}/return`, { reason: "customer_absent" }],
+  ["handover", `/v1/driver/orders/${stranded.id}/handover`, undefined],
+  ["priority", `/v1/driver/orders/${stranded.id}/priority`, { is_priority: true }],
   [
     "payment",
     `/v1/driver/orders/${stranded.id}/payment`,
@@ -449,6 +490,263 @@ check(
   "after all of that the order is untouched",
   untouched.body?.status === "in_pharmacy",
   JSON.stringify(untouched.body?.status),
+);
+
+// --- the scheduled stage ---------------------------------------------------
+
+section("The admin calendar (domain workflow: avant prise en charge)");
+
+const scheduled = await call("POST", "/v1/orders", {
+  token: adminToken,
+  body: {
+    client_id: clientId,
+    driver_id: driverId,
+    delivery_date: DATE,
+    delivery_window: "PM",
+    requested_delivery_time: "14:30",
+    authorized_recipient: "Concierge, apt 4B",
+    packages: [
+      { label_code: `V-${stamp}-A` },
+      { label_code: `V-${stamp}-B`, package_type: "cooler" },
+    ],
+  },
+});
+check(
+  "a new order lands in the calendar, not on the counter",
+  scheduled.status === 201 && scheduled.body?.status === "scheduled",
+  JSON.stringify(scheduled.body?.status ?? scheduled.body),
+);
+check("it has no ready_at yet", scheduled.body?.ready_at === null);
+check(
+  "it records the packages the employee will print labels for",
+  scheduled.body?.package_count === 2,
+  JSON.stringify(scheduled.body?.packages),
+);
+check(
+  "a cooler package forces the cooler-bag requirement",
+  scheduled.body?.requires_cooler_bag === true,
+);
+
+const hiddenQueue = await call("GET", `/v1/driver/queue?date=${DATE}`, {
+  token: driverToken,
+});
+check(
+  "the scheduled order is invisible to its own assigned driver",
+  !hiddenQueue.body?.stops?.some((s) => s.id === scheduled.body?.id),
+);
+
+const earlyPickup = await call(
+  "POST",
+  `/v1/driver/orders/${scheduled.body?.id}/pickup`,
+  { token: driverToken },
+);
+check(
+  "a driver cannot pick up an order nobody has packed",
+  earlyPickup.status === 404,
+  JSON.stringify(earlyPickup.body),
+);
+
+const calendar = await call(
+  "GET",
+  `/v1/orders/calendar?from=${DATE}&to=${DATE}`,
+  { token: adminToken },
+);
+check(
+  "the calendar returns per-day counts",
+  calendar.status === 200 && calendar.body?.days?.length === 1,
+  JSON.stringify(calendar.body),
+);
+check(
+  "the calendar ships no patient data",
+  !JSON.stringify(calendar.body ?? {}).includes("Driver Flow Patient"),
+);
+
+const readied = await call("POST", `/v1/orders/${scheduled.body?.id}/ready`, {
+  token: adminToken,
+});
+check(
+  "staff declaring it ready moves it onto the counter",
+  readied.status === 200 && readied.body?.status === "in_pharmacy",
+  JSON.stringify(readied.body?.status ?? readied.body),
+);
+check("ready stamps ready_at", Boolean(readied.body?.ready_at));
+
+const notifications = await call("GET", "/v1/driver/notifications?unread=true", {
+  token: driverToken,
+});
+check(
+  "the driver is notified that an order is ready",
+  notifications.status === 200 &&
+    notifications.body?.data?.some(
+      (n) => n.type === "order_ready" && n.order_id === scheduled.body?.id,
+    ),
+  JSON.stringify(notifications.body?.data?.slice(0, 2)),
+);
+check(
+  "the notification feed carries no patient data",
+  !JSON.stringify(notifications.body ?? {}).includes("Driver Flow Patient"),
+);
+
+const readyQueue = await call("GET", `/v1/driver/queue?date=${DATE}`, {
+  token: driverToken,
+});
+const readyStop = readyQueue.body?.stops?.find((s) => s.id === scheduled.body?.id);
+check("the readied order now appears in the queue", Boolean(readyStop));
+check(
+  "the stop carries the label codes for the pickup check",
+  readyStop?.packages?.length === 2,
+  JSON.stringify(readyStop?.packages),
+);
+check(
+  "the stop carries who may accept it at the door",
+  readyStop?.authorized_recipient === "Concierge, apt 4B",
+  JSON.stringify(readyStop?.authorized_recipient),
+);
+check(
+  "the stop carries the requested time",
+  readyStop?.requested_delivery_time === "14:30:00",
+  JSON.stringify(readyStop?.requested_delivery_time),
+);
+check(
+  "the queue says whether to take the payment terminal",
+  typeof readyQueue.body?.totals?.requires_payment_terminal === "boolean",
+  JSON.stringify(readyQueue.body?.totals),
+);
+check(
+  "the queue totals the money to collect",
+  typeof readyQueue.body?.totals?.amount_due_total === "number",
+);
+check(
+  "the queue carries the pharmacy return deadline",
+  Boolean(readyQueue.body?.pharmacy?.return_deadline),
+  JSON.stringify(readyQueue.body?.pharmacy),
+);
+
+const marked = await call("POST", "/v1/driver/notifications/read", {
+  token: driverToken,
+});
+check(
+  "the driver can mark the feed read",
+  marked.status === 200 && marked.body?.updated >= 1,
+  JSON.stringify(marked.body),
+);
+
+// --- manual routing --------------------------------------------------------
+
+section("Manual routing (domain workflow: en route)");
+
+const manualQueue = await call("GET", `/v1/driver/queue?date=${DATE}`, {
+  token: driverToken,
+});
+const manualIds = manualQueue.body?.stops?.map((s) => s.id) ?? [];
+const reversed = [...manualIds].reverse();
+
+const sequenced = await call("POST", "/v1/driver/queue/sequence", {
+  token: driverToken,
+  body: { date: DATE, ordered_order_ids: reversed },
+});
+check(
+  "the driver can set the stop order themselves",
+  sequenced.status === 200,
+  JSON.stringify(sequenced.body?.error),
+);
+check(
+  "the queue comes back in the order the driver chose",
+  JSON.stringify(sequenced.body?.stops?.map((s) => s.id)) ===
+    JSON.stringify(reversed),
+  JSON.stringify(sequenced.body?.stops?.map((s) => s.id)),
+);
+
+const foreignSequence = await call("POST", "/v1/driver/queue/sequence", {
+  token: driverToken,
+  body: {
+    date: DATE,
+    ordered_order_ids: ["00000000-0000-0000-0000-000000000000"],
+  },
+});
+check(
+  "sequencing refuses an order that is not on this route",
+  foreignSequence.status === 409,
+  JSON.stringify(foreignSequence.body),
+);
+
+const urgentId = manualIds[manualIds.length - 1];
+const priority = await call("POST", `/v1/driver/orders/${urgentId}/priority`, {
+  token: driverToken,
+  body: { is_priority: true },
+});
+check(
+  "the driver can flag a stop the employee called urgent",
+  priority.status === 200,
+  JSON.stringify(priority.body),
+);
+
+const priorityQueue = await call("GET", `/v1/driver/queue?date=${DATE}`, {
+  token: driverToken,
+});
+check(
+  "a priority stop sorts to the front regardless of route position",
+  priorityQueue.body?.stops?.[0]?.id === urgentId,
+  JSON.stringify(
+    priorityQueue.body?.stops?.map((s) => ({ id: s.id, p: s.is_priority })),
+  ),
+);
+
+// --- handing the returns back ----------------------------------------------
+
+section("Back at the pharmacy (domain workflow: retour en pharmacie)");
+
+const foreignHandover = await call(
+  "POST",
+  `/v1/driver/orders/${returnOrder.id}/handover`,
+  { token: otherDriverToken },
+);
+check(
+  "another organization's driver cannot hand back this package",
+  foreignHandover.status === 404,
+  JSON.stringify(foreignHandover.body),
+);
+
+const handover = await call("POST", "/v1/driver/returns/handover", {
+  token: driverToken,
+  body: { order_ids: [returnOrder.id] },
+});
+check(
+  "the driver confirms the pharmacy took the package back",
+  handover.status === 200 && handover.body?.count === 1,
+  JSON.stringify(handover.body),
+);
+check(
+  "the order is now returned_to_pharmacy",
+  handover.body?.handed_over?.[0]?.status === "returned_to_pharmacy",
+  JSON.stringify(handover.body?.handed_over?.[0]?.status),
+);
+
+const handoverAgain = await call("POST", "/v1/driver/returns/handover", {
+  token: driverToken,
+  body: { order_ids: [returnOrder.id] },
+});
+check(
+  "handing the same package back twice is refused",
+  handoverAgain.status === 409 &&
+    handoverAgain.body?.error?.code === "ORDER_ALREADY_TERMINAL",
+  JSON.stringify(handoverAgain.body),
+);
+
+const finalQueue = await call("GET", `/v1/driver/queue?date=${DATE}`, {
+  token: driverToken,
+});
+check(
+  "the handed-back package leaves the to_return list",
+  !finalQueue.body?.to_return?.some((s) => s.id === returnOrder.id),
+);
+check(
+  "and appears in the closed list, still PII-free",
+  finalQueue.body?.closed?.some((s) => s.id === returnOrder.id) &&
+    !JSON.stringify(finalQueue.body?.closed ?? []).includes(
+      "Driver Flow Patient",
+    ),
+  JSON.stringify(finalQueue.body?.closed?.length),
 );
 
 // --- summary ---------------------------------------------------------------

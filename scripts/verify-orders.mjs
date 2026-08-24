@@ -193,7 +193,11 @@ check(
   JSON.stringify(order.body),
 );
 check("stores amount_due as a number", order.body?.amount_due === 42.5);
-check("starts in_pharmacy and unpaid", order.body?.status === "in_pharmacy" && order.body?.payment_status === "unpaid");
+check(
+  "starts scheduled and unpaid — the calendar, not the counter",
+  order.body?.status === "scheduled" && order.body?.payment_status === "unpaid",
+  JSON.stringify(order.body?.status),
+);
 
 // The heart of §5.2: editing the client must not rewrite delivery history.
 await call("PATCH", `/v1/clients/${clientId}`, {
@@ -238,13 +242,13 @@ check(
 check(
   "the creation event is recorded on the timeline",
   afterClientEdit.body?.status_events?.length === 1 &&
-    afterClientEdit.body.status_events[0].status === "in_pharmacy",
+    afterClientEdit.body.status_events[0].status === "scheduled",
   JSON.stringify(afterClientEdit.body?.status_events),
 );
 check(
   "detail exposes the transitions available from here",
   Array.isArray(afterClientEdit.body?.available_transitions) &&
-    afterClientEdit.body.available_transitions.sort().join(",") === "cancel,pickup",
+    afterClientEdit.body.available_transitions.sort().join(",") === "cancel,mark_ready",
   JSON.stringify(afterClientEdit.body?.available_transitions),
 );
 
@@ -257,7 +261,7 @@ const edited = await call("PATCH", `/v1/orders/${orderId}`, {
   body: { delivery_window: "PM", amount_due: 30 },
 });
 check(
-  "edits are allowed while in_pharmacy",
+  "edits are allowed before a driver takes the package",
   edited.status === 200 && edited.body?.delivery_window === "PM" && edited.body?.amount_due === 30,
   JSON.stringify(edited.body),
 );
@@ -326,7 +330,7 @@ check(
 );
 check(
   "the cancellation is on the audit timeline",
-  cancelledDetail.body?.status_events?.map((e) => e.status).join(",") === "in_pharmacy,cancelled",
+  cancelledDetail.body?.status_events?.map((e) => e.status).join(",") === "scheduled,cancelled",
   JSON.stringify(cancelledDetail.body?.status_events),
 );
 
@@ -419,7 +423,7 @@ check(
 const stillIntact = await call("GET", `/v1/orders/${orderId}`, { token: tokenA });
 check(
   "after all of that, the order is untouched",
-  stillIntact.body?.status === "in_pharmacy" && stillIntact.body?.delivery_window === "PM",
+  stillIntact.body?.status === "scheduled" && stillIntact.body?.delivery_window === "PM",
   JSON.stringify({ status: stillIntact.body?.status, window: stillIntact.body?.delivery_window }),
 );
 
@@ -451,6 +455,88 @@ check(
   "no new deliveries can be created for a deactivated client",
   orderForDeleted.status === 422 && orderForDeleted.body?.error?.code === "CLIENT_INACTIVE",
   JSON.stringify(orderForDeleted.body),
+);
+
+
+// --- the ready transition --------------------------------------------------
+
+section("Declaring an order ready (domain workflow: avant prise en charge)");
+
+const readyClient = await call("POST", "/v1/clients", {
+  token: tokenA,
+  body: {
+    // A client of its own: the shared one is soft-deleted by the deletion
+    // checks above, and an inactive client cannot take new deliveries.
+    name: `Ready Flow Patient ${stamp}`,
+    address: "800 Rue Ready, Montréal, QC H2X 1Y4",
+    phone_number: "+15145558888",
+  },
+});
+
+const readyTarget = await call("POST", "/v1/orders", {
+  token: tokenA,
+  body: {
+    client_id: readyClient.body?.id,
+    delivery_date: "2026-09-15",
+    delivery_window: "AM",
+    packages: [{ label_code: "RDY-1" }],
+  },
+});
+
+const readyRes = await call("POST", `/v1/orders/${readyTarget.body?.id}/ready`, {
+  token: tokenA,
+});
+check(
+  "ready moves a scheduled order onto the counter",
+  readyRes.status === 200 && readyRes.body?.status === "in_pharmacy",
+  JSON.stringify(readyRes.body?.status ?? readyRes.body),
+);
+check("ready stamps ready_at", Boolean(readyRes.body?.ready_at));
+
+const readyTwice = await call("POST", `/v1/orders/${readyTarget.body?.id}/ready`, {
+  token: tokenA,
+});
+check(
+  "an order cannot be declared ready twice",
+  readyTwice.status === 409,
+  JSON.stringify(readyTwice.body),
+);
+
+const scheduledTransitions = await call("GET", `/v1/orders/${order.body?.id}`, {
+  token: tokenA,
+});
+check(
+  "a scheduled order offers mark_ready and cancel",
+  JSON.stringify(
+    [...(scheduledTransitions.body?.available_transitions ?? [])].sort(),
+  ) === JSON.stringify(["cancel", "mark_ready"]),
+  JSON.stringify(scheduledTransitions.body?.available_transitions),
+);
+
+const calendarRes = await call(
+  "GET",
+  "/v1/orders/calendar?from=2026-09-01&to=2026-09-30",
+  { token: tokenA },
+);
+check(
+  "the calendar returns per-day counts",
+  calendarRes.status === 200 && Array.isArray(calendarRes.body?.days),
+  JSON.stringify(calendarRes.body).slice(0, 200),
+);
+check(
+  "the calendar ships counts, not patient records",
+  !JSON.stringify(calendarRes.body ?? {}).includes("patient_name"),
+);
+
+const badRange = await call(
+  "GET",
+  "/v1/orders/calendar?from=2026-09-30&to=2026-09-01",
+  { token: tokenA },
+);
+check(
+  "the calendar refuses a backwards range",
+  badRange.status === 400,
+  JSON.stringify(badRange.body),
 );
 
 // --- summary ---------------------------------------------------------------

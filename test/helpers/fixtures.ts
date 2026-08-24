@@ -32,6 +32,8 @@ const PASSWORD = "TestPassword123!";
 /** Order matters — children before parents. */
 const TABLES = [
   "order_status_events",
+  "order_packages",
+  "driver_notifications",
   "invoice_line_items",
   "invoices",
   "notifications",
@@ -147,6 +149,32 @@ export function request(
       : undefined,
     ...(options.payload === undefined ? {} : { payload: options.payload }),
   });
+}
+
+/**
+ * Declares an order physically prepared, moving it out of the admin calendar
+ * and onto the counter where a driver can see it.
+ *
+ * Orders are created "scheduled" now, so almost every test that wants a driver
+ * to do something needs this step first. It is the pharmacy's real sequence,
+ * not test ceremony: staff pack the bags before anyone collects them.
+ */
+export async function markReady(
+  app: FastifyInstance,
+  adminToken: string,
+  orderId: string,
+): Promise<Record<string, unknown>> {
+  const res = await app.inject({
+    method: "POST",
+    url: `/v1/orders/${orderId}/ready`,
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (res.statusCode !== 200) {
+    throw new Error(
+      `markReady failed with ${res.statusCode}: ${res.body}`,
+    );
+  }
+  return res.json();
 }
 
 export const TEST_PASSWORD = PASSWORD;

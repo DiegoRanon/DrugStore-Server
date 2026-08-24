@@ -10,6 +10,7 @@ import {
 import {
   createTestApp,
   createWorld,
+  markReady,
   request,
   type TestWorld,
 } from "../helpers/fixtures.js";
@@ -37,8 +38,17 @@ afterEach(() => {
   setRouteOptimizer(null);
 });
 
-/** Creates an order assigned to org A's driver. */
-async function createOrder(overrides: Record<string, unknown> = {}) {
+/**
+ * Creates an order assigned to org A's driver and declares it ready.
+ *
+ * Both steps, because an order the pharmacy has not packed yet is invisible to
+ * its driver — which is the point of the scheduled stage and is covered
+ * explicitly in the lifecycle suite rather than implicitly here.
+ */
+async function createOrder(
+  overrides: Record<string, unknown> = {},
+  options: { ready?: boolean } = {},
+) {
   const res = await request(app, {
     method: "POST",
     url: "/v1/orders",
@@ -52,7 +62,10 @@ async function createOrder(overrides: Record<string, unknown> = {}) {
     },
   });
   expect(res.statusCode).toBe(201);
-  return res.json();
+  const order = res.json();
+
+  if (options.ready === false) return order;
+  return markReady(app, world.orgA.adminToken, order.id);
 }
 
 function driver(url: string, payload?: unknown, method: "GET" | "POST" = "POST") {
@@ -144,9 +157,15 @@ describe("PII minimization on the driver device (PRD §8.3)", () => {
   });
 
   it("strips patient details on a return as well", async () => {
+    // A return is not terminal — the package is still in the van — but the
+    // delivery attempt is over, so the patient's details go immediately.
     const order = await createOrder();
     await driver(`/v1/driver/orders/${order.id}/pickup`);
-    const returned = await driver(`/v1/driver/orders/${order.id}/return`);
+    const returned = await driver(`/v1/driver/orders/${order.id}/return`, {
+      reason: "customer_absent",
+    });
+    expect(returned.statusCode).toBe(200);
+    expect(returned.json().status).toBe("returned");
 
     const raw = JSON.stringify(returned.json());
     expect(raw).not.toContain("alpha Patient");
@@ -207,7 +226,9 @@ describe("driver transitions over HTTP", () => {
   it("refuses to return an order still sitting at the pharmacy", async () => {
     // §5.3: that is a cancellation, and it belongs to the admin.
     const order = await createOrder();
-    const res = await driver(`/v1/driver/orders/${order.id}/return`);
+    const res = await driver(`/v1/driver/orders/${order.id}/return`, {
+      reason: "customer_absent",
+    });
     expect(res.statusCode).toBe(409);
   });
 
@@ -224,7 +245,9 @@ describe("driver transitions over HTTP", () => {
   it("leaves a returned order unpaid", async () => {
     const order = await createOrder({ amount_due: 30 });
     await driver(`/v1/driver/orders/${order.id}/pickup`);
-    await driver(`/v1/driver/orders/${order.id}/return`);
+    await driver(`/v1/driver/orders/${order.id}/return`, {
+      reason: "customer_absent",
+    });
 
     const row = await db("orders").where({ id: order.id }).first();
     expect(row.payment_status).toBe("unpaid");
@@ -318,7 +341,9 @@ describe("payment recording (PRD §5.5)", () => {
   it("refuses payment on a returned order", async () => {
     const order = await createOrder({ amount_due: 10 });
     await driver(`/v1/driver/orders/${order.id}/pickup`);
-    await driver(`/v1/driver/orders/${order.id}/return`);
+    await driver(`/v1/driver/orders/${order.id}/return`, {
+      reason: "customer_absent",
+    });
 
     const res = await driver(`/v1/driver/orders/${order.id}/payment`, {
       payment_method: "cash",

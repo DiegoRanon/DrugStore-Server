@@ -35,7 +35,30 @@ export interface OptimizeResult {
   provider: string;
 }
 
+/** Travel from the previous point on the route to this stop. */
+export interface StopEstimate {
+  orderId: string;
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+}
+
+export interface EstimateResult {
+  estimates: StopEstimate[];
+  degraded: boolean;
+  provider: string;
+}
+
 export interface RouteOptimizer {
   readonly name: string;
   optimize(request: OptimizeRequest): Promise<OptimizeResult>;
+  /**
+   * Per-stop distance and duration, for a driver choosing their own route
+   * ("Le livreur determine manuellement l'itineraire le plus rapide ... en
+   * tenant compte de l'estimation de distance faite par l'application").
+   *
+   * An adapter that cannot estimate returns nulls rather than guesses. A
+   * fabricated distance would be used to make a real routing decision, which
+   * is worse than showing nothing.
+   */
+  estimate(request: OptimizeRequest): Promise<EstimateResult>;
 }

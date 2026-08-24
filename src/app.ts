@@ -39,6 +39,10 @@ const REDACTED_PATHS = [
   "*.patient_name",
   "*.address",
   "*.phone_number",
+  // Who may accept the package, and the driver's free-text explanation of a
+  // failed delivery — both routinely name a person.
+  "*.authorized_recipient",
+  "*.failure_note",
   "*.phone",
   "*.email",
   "*.password_hash",

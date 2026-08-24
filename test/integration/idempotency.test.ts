@@ -6,6 +6,7 @@ import { closeRedis } from "../../src/db/redis.js";
 import {
   createTestApp,
   createWorld,
+  markReady,
   request,
   type TestWorld,
 } from "../helpers/fixtures.js";
@@ -49,7 +50,9 @@ async function createOrder(overrides: Record<string, unknown> = {}) {
       ...overrides,
     },
   });
-  return res.json();
+  // Ready, so the driver can act on it — see the lifecycle suite for the
+  // scheduled stage itself.
+  return markReady(app, world.orgA.adminToken, res.json().id);
 }
 
 function driverCall(
@@ -207,6 +210,65 @@ describe("idempotent retries", () => {
       key: "aged",
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  it("does not record a payment twice when it rides along with the completion", async () => {
+    // complete-with-payment writes the transition and the collection in one
+    // transaction, so a retry must replay both or neither — a second charge
+    // recorded against a delivery that only happened once is the worst of the
+    // failures this header exists to prevent.
+    const order = await createOrder({ amount_due: 40 });
+    await driverCall(`/v1/driver/orders/${order.id}/pickup`);
+
+    const payload = {
+      payment: { payment_method: "cash", amount_collected: 40 },
+    };
+    const first = await driverCall(`/v1/driver/orders/${order.id}/complete`, {
+      key: "deliver-and-collect",
+      payload,
+    });
+    const second = await driverCall(`/v1/driver/orders/${order.id}/complete`, {
+      key: "deliver-and-collect",
+      payload,
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.headers["idempotent-replay"]).toBe("true");
+
+    const row = await db("orders").where({ id: order.id }).first();
+    expect(row.amount_collected).toBe(40);
+    expect(row.payment_collected).toBe(true);
+
+    const events = await db("order_status_events").where({
+      order_id: order.id,
+      status: "completed",
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it("replays a batch handover rather than re-running it", async () => {
+    const order = await createOrder();
+    await driverCall(`/v1/driver/orders/${order.id}/pickup`);
+    await driverCall(`/v1/driver/orders/${order.id}/return`, {
+      payload: { reason: "customer_absent" },
+    });
+
+    const payload = { order_ids: [order.id] };
+    const first = await driverCall("/v1/driver/returns/handover", {
+      key: "hand-back",
+      payload,
+    });
+    const second = await driverCall("/v1/driver/returns/handover", {
+      key: "hand-back",
+      payload,
+    });
+
+    expect(first.statusCode).toBe(200);
+    // Without the key this would be ORDER_ALREADY_TERMINAL; the driver sees
+    // their own result instead.
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual(first.json());
   });
 
   it("rejects an oversized key", async () => {

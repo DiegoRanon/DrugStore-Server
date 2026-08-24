@@ -38,6 +38,10 @@ export const ERROR_CODES = {
   // 422 — well-formed but violates a business rule
   ORDER_NOT_ASSIGNED: 422,
   ORDER_NOT_EDITABLE: 422,
+  // Its own code rather than a generic invalid-transition: the fix is for an
+  // employee to declare the order ready, not for the caller to change request.
+  ORDER_NOT_READY: 422,
+  FAILURE_REASON_REQUIRED: 422,
   PAYMENT_DETAILS_REQUIRED: 422,
   PAYMENT_ALREADY_COLLECTED: 422,
   COOLER_BAG_NOT_REQUIRED: 422,
@@ -129,6 +133,21 @@ const CONSTRAINT_ERRORS: Record<string, () => AppError> = {
     new AppError(
       "INTERNAL_ERROR",
       "A status transition was attempted without its timestamp",
+    ),
+  chk_status_stage_timestamp: () =>
+    new AppError(
+      "INTERNAL_ERROR",
+      "A status transition was attempted without its timestamp",
+    ),
+  chk_failure_reason_present: () =>
+    new AppError(
+      "FAILURE_REASON_REQUIRED",
+      "A failed delivery must record why it failed",
+    ),
+  uq_order_packages_position: () =>
+    new AppError(
+      "INTERNAL_ERROR",
+      "Duplicate package position for this order",
     ),
   idx_orders_driver_date_sequence: () =>
     new AppError(
