@@ -268,7 +268,7 @@ Sorting is fixed server-side (orders newest-first, clients and drivers alphabeti
 
 ### 6.4 Live updates: polling, not sockets
 
-The server has **no WebSocket layer** (§9). The documented approach is polling `GET /v1/orders?updated_since=`, and every write bumps `updated_at` through a database trigger, so it cannot miss a change.
+The server has a WebSocket layer, but **no admin fan-out** — it publishes to drivers only (`docs/realtime.md`). `org:{id}:orders` and `driver.location.updated` are still unbuilt, so nothing on this dashboard has a socket to subscribe to. The documented approach here remains polling `GET /v1/orders?updated_since=`, and every write bumps `updated_at` through a database trigger, so it cannot miss a change.
 
 - A Client Component on the board polls a thin Route Handler every **10 seconds** while the tab is visible, passing the timestamp of the last successful fetch.
 - Pause on `visibilitychange`; resume with an immediate fetch.

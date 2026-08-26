@@ -85,6 +85,30 @@ client — you will never see it.
 
 ---
 
+## Realtime (WebSocket)
+
+Not an HTTP endpoint and therefore **not in `openapi.json`** — see
+[realtime.md](realtime.md), which is the contract.
+
+Socket.IO at `/v1/realtime`, authenticated with the same access token in the
+handshake. Drivers are pushed `order.assigned`, `order.ready`,
+`order.unassigned`, and `order.cancelled` — the same four moments that write a
+`driver_notifications` row, published from the same place.
+
+Two things a client must get right:
+
+- **The frame carries no patient data**, only
+  `{ order_id, delivery_date, status }`. React to it by refetching
+  `GET /v1/driver/queue`; never render it.
+- **Keep polling.** The socket is an accelerator, not a replacement. PRD §7
+  requires the fallback, and the driver app only widens its interval (30 s →
+  120 s) while connected.
+
+There is no admin fan-out yet; the dashboard still polls
+`GET /v1/orders?updated_since=`.
+
+---
+
 ## Changed payloads
 
 ### `POST /v1/orders` / `PATCH /v1/orders/{id}` accept

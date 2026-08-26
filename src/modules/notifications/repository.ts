@@ -22,11 +22,18 @@ export interface EmitNotificationInput {
   orderId: string;
   type: DriverNotificationType;
   deliveryDate: string;
+  /**
+   * The order's status at the moment of the event. Not persisted — the feed
+   * row records what happened, and `order_status_events` already owns status
+   * history. This rides along purely so the realtime frame can carry it.
+   */
+  status: string;
 }
 
 export class DriverNotificationsRepository extends OrgScopedRepository {
   protected readonly table = "driver_notifications";
 
+  /** `status` is deliberately not inserted; see EmitNotificationInput. */
   async insert(input: EmitNotificationInput): Promise<DriverNotificationRow> {
     const [row] = await this.runner(this.table)
       .insert({

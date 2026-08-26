@@ -177,4 +177,12 @@ FROM idempotency_keys ORDER BY created_at DESC LIMIT 5;
 
 ## 5. Not covered yet
 
-Location ingest (`POST /v1/driver/locations`), the WebSocket fan-out, and the real Mapbox adapter are **Phase 5**. Automatic route recalculation on pickup/completion/return also lands there — today the driver refreshes the route explicitly via `/v1/driver/queue/optimize`.
+Location ingest (`POST /v1/driver/locations`), the admin-facing WebSocket fan-out, and the real Mapbox adapter are **Phase 5**. Automatic route recalculation on pickup/completion/return also lands there — today the driver refreshes the route explicitly via `/v1/driver/queue/optimize`.
+
+The driver-facing WebSocket channel **is** built — `order.assigned`,
+`order.ready`, `order.unassigned`, `order.cancelled`. See `realtime.md` for the
+contract, and `test/integration/realtime.test.ts` for coverage. To check it by
+hand: connect a client to `/v1/realtime` with a driver's access token, assign
+that driver an order that is already `in_pharmacy`, and confirm an
+`order.assigned` frame arrives carrying only `order_id`, `delivery_date`, and
+`status`.

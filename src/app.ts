@@ -22,6 +22,7 @@ import orderRoutes from "./modules/orders/routes.js";
 import authPlugin from "./plugins/auth.js";
 import errorHandlerPlugin from "./plugins/errorHandler.js";
 import requestIdPlugin from "./plugins/requestId.js";
+import { attachRealtime } from "./realtime/server.js";
 
 /**
  * Fields scrubbed from every log line. PRD §8.6 forbids PII in application
@@ -98,6 +99,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await fastify.register(authPlugin);
+
+  // After the auth plugin, which is what decorates `fastify.jwt` — the socket
+  // handshake verifies the same access token the HTTP routes do.
+  if (env.REALTIME_ENABLED) {
+    attachRealtime(fastify);
+  }
 
   // Generated from the Zod schemas the routes already declare, so the spec
   // cannot drift from what the server actually validates. Registered before

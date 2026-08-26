@@ -552,6 +552,7 @@ export class OrdersService {
       orderId: row.id,
       type,
       deliveryDate: row.delivery_date,
+      status: row.status,
     });
   }
 }

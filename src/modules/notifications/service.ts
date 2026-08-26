@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from "fastify";
 
 import type { RequestContext } from "../../core/context.js";
+import { SOCKET_EVENT, getRealtime } from "../../realtime/index.js";
 import {
   DriverNotificationsRepository,
   type DriverNotificationRow,
@@ -14,10 +15,11 @@ import {
  *  en pharmacie" — and mid-shift, "le livreur ... reste à l'affut des commandes
  *  pouvant être ajouter par la pharmacie durant son shift."
  *
- * There is no push provider behind this. The app polls its queue and this
- * feed; these rows are what make a late addition visible rather than something
- * the driver has to notice by re-reading a list. Real push can be layered on
- * top of the same rows later.
+ * Two channels, one truth. The row is the durable record the app reads on
+ * launch and in the feed screen; `getRealtime().toDriver()` is the live nudge
+ * that saves the driver up to thirty seconds of polling for it (PRD §7).
+ * The row is written first and the push is derived from it, so a driver who
+ * was offline for the push still finds the notification waiting.
  */
 
 export interface DriverNotificationView {
@@ -51,7 +53,7 @@ export class NotificationsService {
   }
 
   /**
-   * Records that something changed for a driver.
+   * Records that something changed for a driver, and tells them now.
    *
    * Fail-open, and called only after the order transaction has committed. A
    * notification is a courtesy on top of a fact that is already true — losing
@@ -59,10 +61,24 @@ export class NotificationsService {
    * told about it, whereas failing the assignment because we could not write
    * the courtesy row would mean the dispatcher's actual work was rejected.
    * Same reasoning as the audit writer in src/core/audit.ts.
+   *
+   * The socket publish sits inside the same try for the same reason, and it is
+   * the weaker of the two: a dropped frame costs the driver one poll interval,
+   * while a Redis outage that propagated out of here would block assignment
+   * across the whole pharmacy.
+   *
+   * Note what the payload does *not* carry — see src/realtime/events.ts. The
+   * driver serializer is the only path patient data takes to a device.
    */
   async emit(input: EmitNotificationInput): Promise<void> {
     try {
-      await this.repo.insert(input);
+      const row = await this.repo.insert(input);
+
+      getRealtime().toDriver(input.driverId, SOCKET_EVENT[input.type], {
+        order_id: input.orderId,
+        delivery_date: row.delivery_date,
+        status: input.status,
+      });
     } catch (error) {
       this.log.error(
         {

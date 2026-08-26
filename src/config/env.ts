@@ -36,6 +36,19 @@ const envSchema = z
 
     CORS_ORIGINS: z.string().default(""),
 
+    /**
+     * Operational kill-switch for the Socket.IO layer (PRD §7). Off means the
+     * driver app falls back to its 30-second poll, which is the behaviour the
+     * app is written to degrade to anyway.
+     *
+     * Spelled out rather than z.coerce.boolean(), which parses the string
+     * "false" as true and would make the switch impossible to turn off.
+     */
+    REALTIME_ENABLED: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((v) => v === "true"),
+
     ROUTE_OPTIMIZER: z.enum(["fake", "mapbox"]).default("fake"),
     NOTIFICATION_SENDER: z.enum(["fake", "twilio"]).default("fake"),
 

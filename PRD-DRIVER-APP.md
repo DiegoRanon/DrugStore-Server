@@ -296,7 +296,7 @@ The complete driver flow is built and verified: login/refresh/registration, the 
 | Capability | Server state | App implication |
 | --- | --- | --- |
 | Location ingest (`POST /v1/driver/locations`) | Phase 5 | No background tracking; no "share my location" toggle in v1 |
-| WebSocket push (`order.assigned`, `queue.resequenced`) | Phase 5 | 30-second foreground polling instead (§5.1) |
+| WebSocket push — `queue.resequenced` | Phase 5 | The driver owns their own sequence; nothing to react to yet |
 | Real Mapbox optimizer | Phase 5 — port + degradation contract exist, adapter is fake | Optimize works end-to-end but sequences are not yet traffic-aware; no per-stop ETA (§9.3) |
 | Automatic re-optimization on state change | Phase 5 | The app triggers optimize explicitly (§5.4) |
 | Patient SMS "on the way" | No Twilio integration | Nothing — a server feature; the app does not compensate |
@@ -346,7 +346,7 @@ Ship no placeholder UI for these. A greyed-out tracking toggle teaches drivers t
 1. **Evening window.** Mobilus supports three windows (AM / PM / soirée) and the screenshots show pharmacies actively using all three. Our enum is `AM`/`PM`. Is two windows a real constraint for target pharmacies, or a launch blocker? Adding a value is cheap now and disruptive later.
 2. **Device policy.** Driver-owned phones or pharmacy-issued devices? BYOD raises the stakes on §8 (backups, screenshots, OS version floor) and argues for the biometric app-lock below.
 3. **Biometric app lock.** Require FaceID/fingerprint on app foreground after N minutes? Cheap with `expo-local-authentication`, meaningful for a device left on a car seat — but friction at every red light. Needs a real driver's input.
-4. **How does a driver learn about a new assignment mid-route?** 30-second foreground polling covers the app-open case; there is no push in v1. If drivers keep the phone in navigation full-time, an assignment could go unseen for a while. Is that acceptable operationally, or does the pharmacy call the driver anyway (their current workflow)?
+4. **How does a driver learn about a new assignment mid-route?** *Partly answered.* The server now pushes `order.assigned` over the WebSocket layer (`docs/realtime.md`), so an app-open driver sees the stop in about a second with no interaction. The **phone-in-pocket** case is still open: the socket closes when the app backgrounds (§10), there are still no OS push notifications (§8), and an assignment can go unseen until the driver next looks. Is that acceptable operationally, or does the pharmacy call the driver anyway (their current workflow)?
 5. **Should "Delivered" ever require a second factor** (e.g. long-press instead of tap) to prevent pocket-taps? A mis-tapped completion is an admin correction and a PII wipe on the device. Recommendation: full-width button with a 300 ms press is enough; revisit with pilot data.
 6. **Straight-line distance on cards** (Mobilus shows "10.21 km ENE"): useful triage signal or noise once the route is sequenced? Trivial to compute; the question is card real estate.
 7. **What does the driver do at day's end with uncollected payments or unanswered cooler checks?** The exceptions live on the pharmacy's report, but a small end-of-shift checklist in the app (pending syncs, unanswered QC, packages to return) may prevent most morning-after support calls. Depends on §9.3's day-summary endpoint.
