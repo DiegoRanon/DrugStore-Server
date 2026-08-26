@@ -27,7 +27,11 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 try {
-  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  // `::` rather than `0.0.0.0`: a dual-stack listener serves the public proxy
+  // over IPv4 and is also reachable on the platform's private network, which
+  // on Railway is IPv6-only. Binding IPv4-only would make the dashboard's
+  // `http://api.railway.internal:3000` calls fail while curl kept working.
+  await app.listen({ port: env.PORT, host: "::" });
 } catch (error) {
   app.log.error({ err: error }, "failed to start");
   process.exit(1);
