@@ -34,10 +34,27 @@ export interface OrderRow {
   phone_number: string;
   authorized_recipient: string | null;
 
+  /**
+   * Geocode of `address`, snapshotted alongside it and for the same reason.
+   * Null when the address was typed by hand rather than picked from Places —
+   * such a stop is still delivered, it just cannot be routed, so it is
+   * appended to the sequence rather than placed in it.
+   *
+   * PII, exactly as much as the address is. Active-stop responses only.
+   */
+  place_id: string | null;
+  formatted_address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geocoded_at: Date | null;
+
   delivery_date: string;
   delivery_window: DeliveryWindow;
   /** Finer-grained ask than the window, when the pharmacy promised a time. */
   requested_delivery_time: string | null;
+  /** An explicit interval — "between 2 and 4". Both ends or neither. */
+  requested_time_start: string | null;
+  requested_time_end: string | null;
 
   payment_status: PaymentStatus;
   payment_collected: boolean;
@@ -224,9 +241,16 @@ export class OrdersRepository extends OrgScopedRepository {
       address: string;
       phone_number: string;
       authorized_recipient?: string | null;
+      place_id?: string | null;
+      formatted_address?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
+      geocoded_at?: Date | null;
       delivery_date: string;
       delivery_window: DeliveryWindow;
       requested_delivery_time?: string | null;
+      requested_time_start?: string | null;
+      requested_time_end?: string | null;
       payment_status: PaymentStatus;
       amount_due?: number | null;
       requires_cooler_bag: boolean;
@@ -304,14 +328,21 @@ export class OrdersRepository extends OrgScopedRepository {
    * stops sort last rather than first — a NULL is "not yet placed", not
    * "position zero".
    */
-  async listQueue(date: string): Promise<OrderRow[]> {
-    return this.actorScoped()
+  async listQueue(date: string, driverId?: string): Promise<OrderRow[]> {
+    const query = this.actorScoped()
       .select<OrderRow[]>("orders.*")
       .where(this.col("delivery_date"), date)
       .whereIn(this.col("status"), [...ACTIVE_STATUSES])
       .orderByRaw(
         "orders.is_priority DESC, orders.sequence_number ASC NULLS LAST, orders.created_at ASC",
       );
+
+    // Narrows an admin's org-wide view to one driver's day, which is the unit
+    // a route is optimized in. Redundant but harmless for a driver caller —
+    // actorScoped() has already pinned them to their own rows.
+    if (driverId) query.where(this.col("driver_id"), driverId);
+
+    return query;
   }
 
   /**
@@ -498,6 +529,52 @@ export class OrdersRepository extends OrgScopedRepository {
       .where({ id: this.organizationId })
       .first();
     return row ?? { name: "", phone: null, return_deadline: null };
+  }
+
+  /**
+   * Everything the route optimizer needs about the pharmacy itself: the
+   * clock bounds behind AM/PM, the zone those bounds are stated in, and the
+   * coordinate a route starts and ends at.
+   *
+   * Separate from findOrganizationContact() because that one feeds every
+   * queue response and this one is read on optimize alone — the driver app
+   * has no business receiving the org's window configuration on every poll.
+   *
+   * Falls back to the schema defaults rather than throwing. A missing
+   * organizations row is not a thing that happens to a request that already
+   * authenticated against one, and a route is more useful than a 500.
+   */
+  async findOrganizationRouting(): Promise<{
+    timezone: string;
+    am_window_start: string;
+    am_window_end: string;
+    pm_window_start: string;
+    pm_window_end: string;
+    latitude: number | null;
+    longitude: number | null;
+  }> {
+    const row = await this.runner("organizations")
+      .select(
+        "timezone",
+        "am_window_start",
+        "am_window_end",
+        "pm_window_start",
+        "pm_window_end",
+        "latitude",
+        "longitude",
+      )
+      .where({ id: this.organizationId })
+      .first();
+
+    return {
+      timezone: row?.timezone ?? "America/Toronto",
+      am_window_start: row?.am_window_start ?? "09:00",
+      am_window_end: row?.am_window_end ?? "12:00",
+      pm_window_start: row?.pm_window_start ?? "13:00",
+      pm_window_end: row?.pm_window_end ?? "17:00",
+      latitude: row?.latitude ?? null,
+      longitude: row?.longitude ?? null,
+    };
   }
 
   async listStatusEvents(orderId: string): Promise<OrderStatusEventRow[]> {

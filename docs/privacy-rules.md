@@ -74,11 +74,31 @@ The only free-text fields anywhere near an order are:
 | `address` | yes | yes | **no** | redacted |
 | `phone_number` | yes | yes | **no** | redacted |
 | `authorized_recipient` | yes | yes | **no** | redacted |
+| `latitude` / `longitude` | yes | yes | **no** | redacted |
+| `place_id` | yes | **no** | **no** | redacted |
+| `formatted_address` | yes | **no** | **no** | redacted |
 | `failure_note` | yes | **no** | **no** | redacted |
 | `label_code` | yes | yes | yes | not redacted — a bag number is not a person |
 
 Label codes stay on a closed stop deliberately: the driver has to hand the right
 parcels back at the counter.
+
+### Coordinates are address-class PII
+
+A latitude/longitude pair is not weaker than the address it came from — it is
+the same fact, stated precisely enough to put a pin on a house. It therefore
+follows `address` exactly: present on an active stop, absent from
+`ClosedDriverOrderView`, redacted in logs.
+
+`place_id` and `formatted_address` are admin-only. A driver has no use for
+either — they navigate from the coordinate and read the address off the
+screen — and both resolve straight back to the home, so there is no reason to
+put them on a phone that a client-side cache wipe cannot be trusted to clear.
+
+The mechanism is the same one that protects the address: `toDriverOrderView()`
+branches on `showsPatientDetails()`, and the closed branch does not read the
+columns at all, so a coordinate cannot be forwarded onto a closed stop by
+accident. That is a compile error, not a review catch.
 
 Log redaction is configured once, on the logger, in `src/app.ts` — so a future
 `request.log.info({ order })` cannot leak an address by accident.

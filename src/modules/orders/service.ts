@@ -7,6 +7,10 @@ import { AppError } from "../../core/errors.js";
 import { buildPage, decodeCursor, type Page } from "../../core/pagination.js";
 import { db } from "../../db/knex.js";
 import { ClientsRepository } from "../clients/repository.js";
+import {
+  RouteService,
+  type StopEstimateView,
+} from "./routeService.js";
 import { NotificationsService } from "../notifications/service.js";
 import type { DriverNotificationType } from "../notifications/repository.js";
 import {
@@ -44,9 +48,15 @@ export interface CreateOrderInput {
   address?: string;
   phone_number?: string;
   authorized_recipient?: string | null;
+  place_id?: string | null;
+  formatted_address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   delivery_date: string;
   delivery_window: DeliveryWindow;
   requested_delivery_time?: string | null;
+  requested_time_start?: string | null;
+  requested_time_end?: string | null;
   payment_status?: PaymentStatus;
   amount_due?: number | null;
   requires_cooler_bag?: boolean;
@@ -59,9 +69,15 @@ export interface UpdateOrderInput {
   address?: string;
   phone_number?: string;
   authorized_recipient?: string | null;
+  place_id?: string | null;
+  formatted_address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   delivery_date?: string;
   delivery_window?: DeliveryWindow;
   requested_delivery_time?: string | null;
+  requested_time_start?: string | null;
+  requested_time_end?: string | null;
   payment_status?: PaymentStatus;
   amount_due?: number | null;
   requires_cooler_bag?: boolean;
@@ -91,6 +107,7 @@ export class OrdersService {
   private readonly repo: OrdersRepository;
   private readonly clients: ClientsRepository;
   private readonly notifications: NotificationsService;
+  private readonly routes: RouteService;
 
   constructor(
     private readonly ctx: RequestContext,
@@ -99,6 +116,7 @@ export class OrdersService {
     this.repo = new OrdersRepository(ctx);
     this.clients = new ClientsRepository(ctx);
     this.notifications = new NotificationsService(ctx, log);
+    this.routes = new RouteService(ctx, log);
   }
 
   // --- creation ------------------------------------------------------------
@@ -154,9 +172,31 @@ export class OrdersService {
           address: input.address ?? client.address,
           phone_number: input.phone_number ?? client.phone_number,
           authorized_recipient: input.authorized_recipient ?? null,
+          // The geocode is snapshotted as one unit with the address it
+          // describes. Taking the coordinate from the caller while the
+          // address fell back to the client record — or the reverse — would
+          // route this delivery to a different place than the one printed on
+          // the bag, so the whole geocode follows whichever address won.
+          ...(input.address !== undefined || input.latitude != null
+            ? {
+                place_id: input.place_id ?? null,
+                formatted_address: input.formatted_address ?? null,
+                latitude: input.latitude ?? null,
+                longitude: input.longitude ?? null,
+                geocoded_at: input.latitude != null ? new Date() : null,
+              }
+            : {
+                place_id: client.place_id,
+                formatted_address: client.formatted_address,
+                latitude: client.latitude,
+                longitude: client.longitude,
+                geocoded_at: client.geocoded_at,
+              }),
           delivery_date: input.delivery_date,
           delivery_window: input.delivery_window,
           requested_delivery_time: input.requested_delivery_time ?? null,
+          requested_time_start: input.requested_time_start ?? null,
+          requested_time_end: input.requested_time_end ?? null,
           payment_status: input.payment_status ?? "unpaid",
           amount_due: input.amount_due ?? null,
           requires_cooler_bag: coolerBagRequired(
@@ -427,6 +467,68 @@ export class OrdersService {
     const row = await this.repo.setPriority(id, isPriority);
     if (!row) throw new AppError("NOT_FOUND", "Order not found");
     return this.withPackages(row);
+  }
+
+  /**
+   * Optimizes one driver's route for one day, from the dashboard.
+   *
+   * The pharmacy sequences the route before the driver leaves, so the stop
+   * order is on their screen at pickup rather than something they have to
+   * ask for once they are already out. Delegates to the same RouteService the
+   * driver's own optimize button uses — two entry points, one route.
+   *
+   * The driver is verified to belong to this organization before anything is
+   * written: driver_id arrives in the request body, which makes it the one
+   * value here that an admin supplies from outside.
+   */
+  async optimizeRoute(input: {
+    date: string;
+    driverId: string;
+    timeRange?: { start: string; end: string };
+  }): Promise<{
+    date: string;
+    driver_id: string;
+    orders: AdminOrderView[];
+    degraded: boolean;
+    estimates?: StopEstimateView[];
+    unroutable_order_ids: string[];
+  }> {
+    const driver = await this.repo.findAssignableDriver(input.driverId);
+    if (!driver) {
+      throw new AppError("NOT_FOUND", "Driver not found in this organization");
+    }
+
+    const outcome = await this.routes.optimizeForDriver(
+      input.driverId,
+      input.date,
+      { timeRange: input.timeRange },
+    );
+
+    // Re-read rather than reorder in memory: resequence() wrote
+    // sequence_number, and the queue's sort puts priority stops ahead of it.
+    // Returning the ids in the optimizer's order would show the admin a
+    // sequence the driver will not see.
+    const rows = await this.repo.listQueue(input.date, input.driverId);
+
+    this.log.info(
+      {
+        driver_id: input.driverId,
+        date: input.date,
+        stop_count: rows.length,
+        degraded: outcome.degraded,
+        unroutable: outcome.unroutableOrderIds.length,
+      },
+      "route optimized from the dashboard",
+    );
+
+    return {
+      date: input.date,
+      driver_id: input.driverId,
+      orders: await Promise.all(rows.map((row) => this.withPackages(row))),
+      degraded: outcome.degraded,
+      estimates: outcome.estimates,
+      unroutable_order_ids: outcome.unroutableOrderIds,
+    };
   }
 
   private async withPackages(row: OrderRow): Promise<AdminOrderView> {

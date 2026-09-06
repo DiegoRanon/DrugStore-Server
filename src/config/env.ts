@@ -49,10 +49,53 @@ const envSchema = z
       .default("true")
       .transform((v) => v === "true"),
 
-    ROUTE_OPTIMIZER: z.enum(["fake", "mapbox"]).default("fake"),
+    ROUTE_OPTIMIZER: z.enum(["fake", "mapbox", "googlemaps"]).default("fake"),
+    /**
+     * Geocoding and address autocomplete. "fake" returns a fixed set of
+     * Montreal addresses, which is enough to exercise the whole pipeline
+     * without a key — and renders as a working dropdown in dev.
+     */
+    GEOCODER: z.enum(["fake", "googlemaps"]).default("fake"),
+    /**
+     * Traffic-aware ETAs for the driver's remaining run (Routes API).
+     *
+     * Separate from ROUTE_OPTIMIZER because it is a separate Google product
+     * on a separate credential: this one needs only GOOGLE_MAPS_API_KEY, the
+     * same plain key as Places. "fake" derives legs from straight-line
+     * distance — deterministic, roughly right, and honest about knowing
+     * nothing of traffic.
+     */
+    TRAVEL_TIME: z.enum(["fake", "googlemaps"]).default("fake"),
     NOTIFICATION_SENDER: z.enum(["fake", "twilio"]).default("fake"),
 
     MAPBOX_ACCESS_TOKEN: z.string().optional(),
+
+    /**
+     * Places (New) uses a plain API key; Route Optimization is a Cloud API and
+     * takes a service account. Two different credentials for two different
+     * Google products — a common enough surprise that they are named apart
+     * rather than collapsed into one GOOGLE_API_KEY that only half works.
+     */
+    GOOGLE_MAPS_API_KEY: z.string().optional(),
+    GOOGLE_CLOUD_PROJECT_ID: z.string().optional(),
+    /** The service account JSON, inline. Deployed from Secrets Manager. */
+    GOOGLE_APPLICATION_CREDENTIALS_JSON: z.string().optional(),
+
+    /**
+     * ISO 3166-1 alpha-2, comma separated. Restricts suggestions to where the
+     * pharmacy actually delivers — an address in another country can only
+     * ever be picked by mistake. Empty means no restriction.
+     */
+    GEOCODE_COUNTRY: z
+      .string()
+      .default("ca")
+      .transform((v) =>
+        v
+          .split(",")
+          .map((c) => c.trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    GEOCODE_LANGUAGE: z.string().default("fr-CA"),
     TWILIO_ACCOUNT_SID: z.string().optional(),
     TWILIO_AUTH_TOKEN: z.string().optional(),
     TWILIO_MESSAGING_SERVICE_SID: z.string().optional(),
@@ -86,6 +129,52 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["MAPBOX_ACCESS_TOKEN"],
         message: "required when ROUTE_OPTIMIZER=mapbox",
+      });
+    }
+    /*
+      Only the project id is required. The service-account key is deliberately
+      optional: without one the client uses Application Default Credentials —
+      an attached service account on GCP, workload identity elsewhere, or a
+      developer's own gcloud login. That is the better arrangement, and often
+      the only one available, since newer Google Cloud organizations block
+      service-account key creation by default
+      (constraints/iam.disableServiceAccountKeyCreation).
+
+      A malformed key is worth catching here rather than at the first optimize:
+      JSON.parse runs in the adapter's constructor, and a stray newline from a
+      paste would otherwise take down the route instead of the boot.
+    */
+    if (env.ROUTE_OPTIMIZER === "googlemaps" && !env.GOOGLE_CLOUD_PROJECT_ID) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["GOOGLE_CLOUD_PROJECT_ID"],
+        message: "required when ROUTE_OPTIMIZER=googlemaps",
+      });
+    }
+    if (env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+      try {
+        JSON.parse(env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["GOOGLE_APPLICATION_CREDENTIALS_JSON"],
+          message:
+            "must be the service account JSON on a single line (a .env value cannot span lines)",
+        });
+      }
+    }
+    if (env.GEOCODER === "googlemaps" && !env.GOOGLE_MAPS_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["GOOGLE_MAPS_API_KEY"],
+        message: "required when GEOCODER=googlemaps",
+      });
+    }
+    if (env.TRAVEL_TIME === "googlemaps" && !env.GOOGLE_MAPS_API_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["GOOGLE_MAPS_API_KEY"],
+        message: "required when TRAVEL_TIME=googlemaps",
       });
     }
     if (env.NOTIFICATION_SENDER === "twilio") {

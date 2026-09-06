@@ -95,6 +95,11 @@ Drugstores / pharmacies — the B2B tenants.
 | `pm_window_start` | `TIME` | NO | `'13:00'` | |
 | `pm_window_end` | `TIME` | NO | `'17:00'` | |
 | `return_deadline` | `TIME` | NO | `'18:00'` | When the driver must be back at the pharmacy with cash, invoices, and returns. |
+| `place_id` | `VARCHAR(255)` | YES | | Google Places id for the pharmacy's own address. |
+| `formatted_address` | `VARCHAR(500)` | YES | | Standardized pharmacy address. |
+| `latitude` | `DOUBLE PRECISION` | YES | | The depot a driver's route starts and ends at. Not PII — a business address. Without it the optimizer can only order stops relative to each other. |
+| `longitude` | `DOUBLE PRECISION` | YES | | Paired with `latitude` by constraint. |
+| `geocoded_at` | `TIMESTAMPTZ` | YES | | |
 | `created_at` | `TIMESTAMPTZ` | NO | `now()` | |
 | `updated_at` | `TIMESTAMPTZ` | NO | `now()` | Maintained by `trg_organizations_updated_at`. |
 
@@ -102,6 +107,7 @@ Drugstores / pharmacies — the B2B tenants.
 
 - `chk_delivery_rate_non_negative` — `delivery_rate >= 0`
 - `chk_org_locale` — `locale IN ('fr', 'en')`
+- `chk_organizations_coordinates_paired` — both or neither, both in range
 
 **Triggers:** `trg_organizations_updated_at` (`BEFORE UPDATE` → `set_updated_at()`)
 
@@ -118,10 +124,19 @@ Patients saved against an organization so staff can pick from a list instead of 
 | `name` | `VARCHAR(255)` | NO | | PII |
 | `address` | `VARCHAR(500)` | NO | | PII |
 | `phone_number` | `VARCHAR(50)` | NO | | PII |
+| `place_id` | `VARCHAR(255)` | YES | | Google Places id for the saved address. |
+| `formatted_address` | `VARCHAR(500)` | YES | | Standardized address. PII. |
+| `latitude` | `DOUBLE PRECISION` | YES | | PII. Copied onto each order at creation and never read back — an order's coordinate is a snapshot, like its address. |
+| `longitude` | `DOUBLE PRECISION` | YES | | Paired with `latitude` by constraint. |
+| `geocoded_at` | `TIMESTAMPTZ` | YES | | |
 | `notes` | `VARCHAR(500)` | YES | | Logistics notes only. |
 | `is_active` | `BOOLEAN` | NO | `TRUE` | |
 | `created_at` | `TIMESTAMPTZ` | NO | `now()` | |
 | `updated_at` | `TIMESTAMPTZ` | NO | `now()` | Maintained by `trg_clients_updated_at`. |
+
+**Constraints**
+
+- `chk_clients_coordinates_paired` — both or neither, both in range
 
 **Indexes**
 
@@ -207,9 +222,16 @@ One delivery attempt. Logistics data only. Client name/address/phone are snapsho
 | `address` | `VARCHAR(500)` | NO | | Snapshot. PII. |
 | `phone_number` | `VARCHAR(50)` | NO | | Snapshot. PII. |
 | `authorized_recipient` | `VARCHAR(255)` | YES | | Who may accept at the door. PII — active driver views only. |
+| `place_id` | `VARCHAR(255)` | YES | | Google Places id for the selected address. Snapshot. Admin-only. |
+| `formatted_address` | `VARCHAR(500)` | YES | | The standardized address that was geocoded. Snapshot. Admin-only. |
+| `latitude` | `DOUBLE PRECISION` | YES | | Snapshot. **PII — active driver views only**, same cliff as `address`. `NULL` = never geocoded, so the stop is appended to a route rather than placed in it. |
+| `longitude` | `DOUBLE PRECISION` | YES | | As above. Paired with `latitude` by constraint. |
+| `geocoded_at` | `TIMESTAMPTZ` | YES | | When the coordinate was captured. |
 | `delivery_date` | `DATE` | NO | | |
 | `delivery_window` | `delivery_window` | NO | | |
 | `requested_delivery_time` | `TIME` | YES | | Finer-grained ask than the window, when the pharmacy promised a time. Local to the org timezone. |
+| `requested_time_start` | `TIME` | YES | | Start of an explicit range — "between 2 and 4". Both ends or neither. Local to the org timezone. |
+| `requested_time_end` | `TIME` | YES | | End of that range. |
 | `payment_status` | `payment_status` | NO | `'unpaid'` | What the patient owes at the door. |
 | `payment_collected` | `BOOLEAN` | NO | `FALSE` | |
 | `payment_collected_at` | `TIMESTAMPTZ` | YES | | |
@@ -243,6 +265,8 @@ One delivery attempt. Logistics data only. Client name/address/phone are snapsho
 - `chk_failure_reason_present` — `returned` and `returned_to_pharmacy` require `failure_reason`
 - `chk_amount_due_non_negative` — `amount_due IS NULL OR amount_due >= 0`
 - `chk_pickup_package_count_non_negative` — `pickup_package_count IS NULL OR pickup_package_count >= 0`
+- `chk_orders_coordinates_paired` — `latitude` and `longitude` are both null or both set, and both in range. Half a coordinate reads as present to a naive check and routes to the Gulf of Guinea.
+- `chk_orders_requested_time_range` — `requested_time_start` and `requested_time_end` are both null or both set, and the end is after the start. An inverted range is an empty constraint, which makes a stop unroutable rather than merely late.
 
 **Indexes**
 
@@ -257,6 +281,7 @@ One delivery attempt. Logistics data only. Client name/address/phone are snapsho
 | `idx_orders_org_updated` | `(organization_id, updated_at DESC)` | Polling fallback. |
 | `idx_orders_driver_date_sequence` | `(driver_id, delivery_date, sequence_number)` | Unique, `WHERE status IN ('in_pharmacy', 'picked_up') AND driver_id IS NOT NULL AND sequence_number IS NOT NULL`. Deliberately unchanged by migration 011: `scheduled` orders are not sequenced, and a `returned` one keeps a stale position that must not collide. |
 | `idx_orders_org_date_priority` | `(organization_id, delivery_date, is_priority DESC)` | Partial, active statuses only. Priority stops sort to the front of the driver's queue. |
+| `idx_orders_ungeocoded` | `(organization_id, delivery_date)` | Partial, `WHERE latitude IS NULL AND status IN ('in_pharmacy', 'picked_up')`. Answers "which of today's stops cannot be routed?" on every optimize run. |
 
 **Triggers:** `trg_orders_updated_at`
 

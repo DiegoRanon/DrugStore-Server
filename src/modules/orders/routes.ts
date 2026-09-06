@@ -7,6 +7,8 @@ import {
   calendarResponseSchema,
   createOrderBodySchema,
   listOrdersQuerySchema,
+  optimizeRouteBodySchema,
+  optimizeRouteResponseSchema,
   orderDetailResponseSchema,
   orderListResponseSchema,
   orderResponseSchema,
@@ -66,6 +68,39 @@ const orderRoutes: FastifyPluginAsyncZod = async (fastify) => {
         updatedSince: request.query.updated_since,
         limit: request.query.limit,
         cursor: request.query.cursor,
+      });
+    },
+  );
+
+  /**
+   * Sequences a driver's day before they leave the pharmacy.
+   *
+   * The same optimization the driver can run from their own app, exposed to
+   * staff so the route is already on the packing counter's screen at pickup.
+   * Both write `sequence_number`, so whichever ran last wins — which is the
+   * intent, since the later actor knows more.
+   *
+   * Not under /v1/driver/*: that whole prefix is requireRole("driver"), and
+   * the driver id here comes from the body rather than the token.
+   */
+  fastify.post(
+    "/route/optimize",
+    {
+      schema: {
+        tags: ["orders"],
+        summary: "Optimize and persist a driver's stop order for a day",
+        description:
+          "Writes sequence_number for every active stop assigned to the driver on that date. A provider failure keeps the previous order and returns degraded: true rather than an error. Stops without coordinates are appended and listed in unroutable_order_ids.",
+        body: optimizeRouteBodySchema,
+        response: { 200: optimizeRouteResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new OrdersService(request.ctx, request.log);
+      return service.optimizeRoute({
+        date: request.body.date,
+        driverId: request.body.driver_id,
+        timeRange: request.body.time_range,
       });
     },
   );

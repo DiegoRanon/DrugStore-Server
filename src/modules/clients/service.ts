@@ -18,6 +18,10 @@ export interface ClientView {
   name: string;
   address: string;
   phone_number: string;
+  place_id: string | null;
+  formatted_address: string | null;
+  latitude: number | null;
+  longitude: number | null;
   notes: string | null;
   is_active: boolean;
   created_at: string;
@@ -31,6 +35,10 @@ function toView(row: ClientRow): ClientView {
     name: row.name,
     address: row.address,
     phone_number: row.phone_number,
+    place_id: row.place_id,
+    formatted_address: row.formatted_address,
+    latitude: row.latitude,
+    longitude: row.longitude,
     notes: row.notes,
     is_active: row.is_active,
     created_at: row.created_at.toISOString(),
@@ -40,6 +48,19 @@ function toView(row: ClientRow): ClientView {
     view.compliance_reminder = COMPLIANCE_REMINDER;
   }
   return view;
+}
+
+/**
+ * Stamps when a coordinate was captured, so a stale geocode is identifiable
+ * later. Set only when a coordinate is actually present: an address edited
+ * back to hand-typed clears the pair and must clear the timestamp with it,
+ * or the row claims a geocode it no longer has.
+ */
+function withGeocodedAt<T extends { latitude?: number | null }>(
+  input: T,
+): T & { geocoded_at?: Date | null } {
+  if (input.latitude === undefined) return input;
+  return { ...input, geocoded_at: input.latitude === null ? null : new Date() };
 }
 
 export class ClientsService {
@@ -116,9 +137,13 @@ export class ClientsService {
     name: string;
     address: string;
     phone_number: string;
+    place_id?: string | null;
+    formatted_address?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
     notes?: string | null;
   }): Promise<ClientView> {
-    const row = await this.repo.create(input);
+    const row = await this.repo.create(withGeocodedAt(input));
     this.warnOnNotes(row.id, input.notes);
     return toView(row);
   }
@@ -129,6 +154,10 @@ export class ClientsService {
       name?: string;
       address?: string;
       phone_number?: string;
+      place_id?: string | null;
+      formatted_address?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
       notes?: string | null;
       is_active?: boolean;
     },
@@ -136,7 +165,7 @@ export class ClientsService {
     const existing = await this.repo.findById(id);
     if (!existing) throw new AppError("NOT_FOUND", "Client not found");
 
-    const row = await this.repo.update(id, patch);
+    const row = await this.repo.update(id, withGeocodedAt(patch));
     if (!row) throw new AppError("NOT_FOUND", "Client not found");
 
     if (patch.notes !== undefined) this.warnOnNotes(id, patch.notes);

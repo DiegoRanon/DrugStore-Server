@@ -86,23 +86,92 @@ const packageListSchema = z
     }
   });
 
-export const createOrderBodySchema = z.object({
-  client_id: z.string().uuid(),
-  driver_id: z.string().uuid().nullable().optional(),
-  // Optional overrides; omitted fields are snapshotted from the client record.
-  patient_name: z.string().trim().min(1).max(255).optional(),
-  address: z.string().trim().min(1).max(500).optional(),
-  phone_number: z.string().trim().min(1).max(50).optional(),
-  authorized_recipient: z.string().trim().min(1).max(255).nullable().optional(),
-  delivery_date: dateSchema,
-  delivery_window: deliveryWindowSchema,
-  requested_delivery_time: timeSchema.nullable().optional(),
-  payment_status: z.enum(["paid", "unpaid"]).optional(),
-  amount_due: amountSchema.nullable().optional(),
-  requires_cooler_bag: z.boolean().optional(),
-  is_priority: z.boolean().optional(),
-  packages: packageListSchema.optional(),
-});
+/**
+ * A geocode the dashboard captured from Places. Sent as a unit or not at all:
+ * accepting a coordinate without the place it came from would let a caller
+ * pin an order anywhere, and the paired-coordinate CHECK constraint rejects
+ * half a pair at the database anyway.
+ */
+const geocodeFields = {
+  place_id: z.string().trim().min(1).max(255).nullable().optional(),
+  formatted_address: z.string().trim().min(1).max(500).nullable().optional(),
+  latitude: z.number().min(-90).max(90).nullable().optional(),
+  longitude: z.number().min(-180).max(180).nullable().optional(),
+};
+
+/**
+ * Both ends of a time range or neither, and in order — the same rule the
+ * database enforces, checked here so the caller gets a field error instead of
+ * a constraint violation.
+ */
+function refineTimeRange<T extends { requested_time_start?: string | null; requested_time_end?: string | null }>(
+  body: T,
+  ctx: z.RefinementCtx,
+): void {
+  const start = body.requested_time_start;
+  const end = body.requested_time_end;
+
+  if ((start ?? null) === null && (end ?? null) === null) return;
+
+  if ((start ?? null) === null || (end ?? null) === null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [start ? "requested_time_end" : "requested_time_start"],
+      message: "A time range needs both a start and an end",
+    });
+    return;
+  }
+
+  if (start! >= end!) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["requested_time_end"],
+      message: "The end of the range must be after its start",
+    });
+  }
+}
+
+/** Coordinates travel as a pair; one without the other is a caller bug. */
+function refineCoordinates<T extends { latitude?: number | null; longitude?: number | null }>(
+  body: T,
+  ctx: z.RefinementCtx,
+): void {
+  const hasLat = body.latitude !== undefined && body.latitude !== null;
+  const hasLng = body.longitude !== undefined && body.longitude !== null;
+  if (hasLat === hasLng) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: [hasLat ? "longitude" : "latitude"],
+    message: "Latitude and longitude must be provided together",
+  });
+}
+
+export const createOrderBodySchema = z
+  .object({
+    client_id: z.string().uuid(),
+    driver_id: z.string().uuid().nullable().optional(),
+    // Optional overrides; omitted fields are snapshotted from the client record.
+    patient_name: z.string().trim().min(1).max(255).optional(),
+    address: z.string().trim().min(1).max(500).optional(),
+    phone_number: z.string().trim().min(1).max(50).optional(),
+    authorized_recipient: z.string().trim().min(1).max(255).nullable().optional(),
+    ...geocodeFields,
+    delivery_date: dateSchema,
+    delivery_window: deliveryWindowSchema,
+    requested_delivery_time: timeSchema.nullable().optional(),
+    requested_time_start: timeSchema.nullable().optional(),
+    requested_time_end: timeSchema.nullable().optional(),
+    payment_status: z.enum(["paid", "unpaid"]).optional(),
+    amount_due: amountSchema.nullable().optional(),
+    requires_cooler_bag: z.boolean().optional(),
+    is_priority: z.boolean().optional(),
+    packages: packageListSchema.optional(),
+  })
+  .superRefine((body, ctx) => {
+    refineTimeRange(body, ctx);
+    refineCoordinates(body, ctx);
+  });
 
 export const updateOrderBodySchema = z
   .object({
@@ -110,9 +179,12 @@ export const updateOrderBodySchema = z
     address: z.string().trim().min(1).max(500).optional(),
     phone_number: z.string().trim().min(1).max(50).optional(),
     authorized_recipient: z.string().trim().min(1).max(255).nullable().optional(),
+    ...geocodeFields,
     delivery_date: dateSchema.optional(),
     delivery_window: deliveryWindowSchema.optional(),
     requested_delivery_time: timeSchema.nullable().optional(),
+    requested_time_start: timeSchema.nullable().optional(),
+    requested_time_end: timeSchema.nullable().optional(),
     payment_status: z.enum(["paid", "unpaid"]).optional(),
     amount_due: amountSchema.nullable().optional(),
     requires_cooler_bag: z.boolean().optional(),
@@ -121,6 +193,10 @@ export const updateOrderBodySchema = z
   })
   .refine((body) => Object.keys(body).length > 0, {
     message: "At least one field must be provided",
+  })
+  .superRefine((body, ctx) => {
+    refineTimeRange(body, ctx);
+    refineCoordinates(body, ctx);
   });
 
 export const assignDriverBodySchema = z.object({
@@ -131,6 +207,25 @@ export const assignDriverBodySchema = z.object({
 export const setPriorityBodySchema = z.object({
   is_priority: z.boolean(),
 });
+
+/**
+ * Optimize one driver's day from the dashboard.
+ *
+ * `time_range` narrows only the stops that carry no promise of their own — an
+ * admin saying "do these this afternoon" must not quietly move a delivery the
+ * pharmacy already promised for 10am. See resolveWindowMinutes().
+ */
+export const optimizeRouteBodySchema = z
+  .object({
+    date: dateSchema,
+    driver_id: z.string().uuid(),
+    time_range: z
+      .object({ start: timeSchema, end: timeSchema })
+      .refine((range) => range.start < range.end, {
+        message: "The end of the range must be after its start",
+      })
+      .optional(),
+  });
 
 export const listOrdersQuerySchema = z
   .object({
@@ -178,9 +273,15 @@ export const orderResponseSchema = z.object({
   address: z.string(),
   phone_number: z.string(),
   authorized_recipient: z.string().nullable(),
+  place_id: z.string().nullable(),
+  formatted_address: z.string().nullable(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
   delivery_date: z.string(),
   delivery_window: deliveryWindowSchema,
   requested_delivery_time: z.string().nullable(),
+  requested_time_start: z.string().nullable(),
+  requested_time_end: z.string().nullable(),
   status: orderStatusSchema,
   is_priority: z.boolean(),
   sequence_number: z.number().nullable(),
@@ -235,4 +336,30 @@ export const calendarResponseSchema = z.object({
       by_status: z.record(orderStatusSchema, z.number()),
     }),
   ),
+});
+
+export const optimizeRouteResponseSchema = z.object({
+  date: z.string(),
+  driver_id: z.string().uuid(),
+  /** The stops in their new order, as the dashboard renders them. */
+  orders: z.array(orderResponseSchema),
+  /**
+   * True when this is the previous ordering rather than the optimizer's
+   * answer — the provider failed and the route degraded rather than erroring.
+   */
+  degraded: z.boolean(),
+  estimates: z
+    .array(
+      z.object({
+        order_id: z.string().uuid(),
+        distance_meters: z.number().nullable(),
+        duration_seconds: z.number().nullable(),
+      }),
+    )
+    .optional(),
+  /**
+   * Stops that had no coordinates and were appended rather than routed. The
+   * dashboard surfaces these so staff can fix the address.
+   */
+  unroutable_order_ids: z.array(z.string().uuid()),
 });

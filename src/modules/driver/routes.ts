@@ -6,6 +6,8 @@ import {
   completeBodySchema,
   coolerCheckBodySchema,
   driverOrderSchema,
+  etaBodySchema,
+  etaResponseSchema,
   handoverBodySchema,
   handoverResponseSchema,
   markNotificationsReadBodySchema,
@@ -76,6 +78,37 @@ const driverRoutes: FastifyPluginAsyncZod = async (fastify) => {
     async (request) => {
       const service = new DriverService(request.ctx, request.log);
       return service.optimizeQueue(
+        request.body.date ?? today(),
+        request.body.current_location,
+      );
+    },
+  );
+
+  /**
+   * How long the rest of the run takes, in current traffic.
+   *
+   * A read that costs money: it calls the Routes API, so the app asks for it
+   * when the answer would have changed — on arrival at the screen, and after
+   * each delivery or return — never on the queue poll.
+   *
+   * Writes nothing. The stop order is an input here, not an output; a driver
+   * checking their ETA must not risk being handed a different route.
+   */
+  fastify.post(
+    "/queue/eta",
+    {
+      schema: {
+        tags: ["driver"],
+        summary: "Traffic-aware arrival times for the remaining stops",
+        description:
+          "Measures the chain the queue is already in: pharmacy to the first stop, then stop to stop. Includes a fixed allowance for time at each door, so finish_time is when the driver is done rather than when they last arrive. Returns degraded: true and no stops when the provider is unavailable — never an invented number.",
+        body: etaBodySchema,
+        response: { 200: etaResponseSchema },
+      },
+    },
+    async (request) => {
+      const service = new DriverService(request.ctx, request.log);
+      return service.routeEta(
         request.body.date ?? today(),
         request.body.current_location,
       );

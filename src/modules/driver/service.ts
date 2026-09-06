@@ -3,10 +3,16 @@ import type { FastifyBaseLogger } from "fastify";
 import type { RequestContext } from "../../core/context.js";
 import { AppError } from "../../core/errors.js";
 import { db } from "../../db/knex.js";
+import type { GeoPoint } from "../../integrations/routing/index.js";
+import { getTravelTimeProvider } from "../../integrations/traveltime/index.js";
 import {
-  getRouteOptimizer,
-  type GeoPoint,
-} from "../../integrations/routing/index.js";
+  accumulateEta,
+  degradedEta,
+  routableStops,
+  DEPARTURE_BUFFER_SECONDS,
+  DWELL_SECONDS,
+  type RouteEtaView,
+} from "../orders/routeEta.js";
 import { NotificationsService } from "../notifications/service.js";
 import {
   OrdersRepository,
@@ -21,14 +27,16 @@ import {
   type ClosedDriverOrderView,
   type DriverOrderView,
 } from "../orders/serializers.js";
+import {
+  RouteService,
+  type StopEstimateView,
+} from "../orders/routeService.js";
 import { OrdersService } from "../orders/service.js";
 import { isTerminal } from "../orders/stateMachine.js";
 
-export interface StopEstimateView {
-  order_id: string;
-  distance_meters: number | null;
-  duration_seconds: number | null;
-}
+// Defined with the optimizer that produces it; re-exported because the queue
+// response shape has always been read from this module.
+export type { StopEstimateView };
 
 export interface QueueTotals {
   stop_count: number;
@@ -81,6 +89,7 @@ export class DriverService {
   private readonly repo: OrdersRepository;
   private readonly orders: OrdersService;
   private readonly notifications: NotificationsService;
+  private readonly routes: RouteService;
 
   constructor(
     private readonly ctx: RequestContext,
@@ -89,6 +98,7 @@ export class DriverService {
     this.repo = new OrdersRepository(ctx);
     this.orders = new OrdersService(ctx, log);
     this.notifications = new NotificationsService(ctx, log);
+    this.routes = new RouteService(ctx, log);
   }
 
   // --- queue ---------------------------------------------------------------
@@ -182,89 +192,105 @@ export class DriverService {
   }
 
   /**
-   * Suggests a stop order and travel estimates for a day (PRD §5.4).
+   * Suggests a stop order and travel estimates for the driver's own day
+   * (PRD §5.4).
    *
-   * A provider failure must never block a driver: the previous sequence is
-   * kept and the response is flagged degraded rather than returning an error,
-   * because a driver holding packages needs *a* list far more than an optimal
-   * one.
+   * The work itself lives in RouteService, shared with the admin dashboard's
+   * optimize action so the two can never drift into producing different
+   * routes for the same day. This method's whole job is to say *whose* day:
+   * a driver optimizes their own, and the id comes from the authenticated
+   * context rather than the request body.
    */
   async optimizeQueue(date: string, origin?: GeoPoint): Promise<DriverQueue> {
-    const active = await this.repo.listQueue(date);
-
-    if (active.length === 0) {
-      return this.getQueue(date);
-    }
-
-    const optimizer = getRouteOptimizer();
-    const request = {
+    const outcome = await this.routes.optimizeForDriver(this.ctx.userId, date, {
       origin,
-      stops: active.map((order) => ({
-        orderId: order.id,
-        address: order.address,
-      })),
-    };
-
-    let orderedIds: string[];
-    let degraded = false;
-
-    try {
-      const result = await optimizer.optimize(request);
-
-      const known = new Set(active.map((o) => o.id));
-      orderedIds = result.orderedOrderIds.filter((id) => known.has(id));
-
-      // A provider that drops or invents stops cannot be trusted for this
-      // run; keep what the driver already had.
-      if (orderedIds.length !== active.length) {
-        throw new Error(
-          `optimizer returned ${orderedIds.length} of ${active.length} stops`,
-        );
-      }
-      degraded = result.degraded;
-    } catch (error) {
-      this.log.error(
-        { err: error, provider: optimizer.name, date },
-        "route optimization failed — keeping the previous sequence",
-      );
-      orderedIds = active.map((order) => order.id);
-      degraded = true;
-    }
-
-    await db.transaction(async (trx) => {
-      await new OrdersRepository(this.ctx, trx).resequence(trx, {
-        driverId: this.ctx.userId,
-        date,
-        orderedIds,
-      });
     });
 
-    /**
-     * Estimates are a separate concern from the ordering, and deliberately do
-     * not feed the `degraded` flag: that flag tells the driver app "this route
-     * is not the optimizer's answer, it is your previous one", which is what
-     * it warns about. An adapter that can order but not measure has given a
-     * perfectly good route. Absent estimates say so by being absent.
-     */
-    let estimates: StopEstimateView[] | undefined;
-    try {
-      const result = await optimizer.estimate(request);
-      if (!result.degraded) {
-        estimates = result.estimates.map((estimate) => ({
-          order_id: estimate.orderId,
-          distance_meters: estimate.distanceMeters,
-          duration_seconds: estimate.durationSeconds,
-        }));
+    const queue = await this.getQueue(date);
+
+    // An empty day is not a degraded one — there was simply nothing to order.
+    if (outcome.orderedIds.length === 0) return queue;
+
+    return {
+      ...queue,
+      estimates: outcome.estimates,
+      degraded: outcome.degraded,
+    };
+  }
+
+  /**
+   * When the driver gets to each remaining stop, and when they are done.
+   *
+   * Measures the chain the queue is already in — pharmacy to stop one, stop
+   * one to stop two, and so on — against predicted traffic. It reads the
+   * route; it never changes it. Nothing here writes `sequence_number`, and a
+   * driver marking a delivery done must never re-run a tour solve: this is
+   * called again on every completion, and re-optimizing on each one could
+   * reorder a route they are halfway through driving.
+   *
+   * The origin is the pharmacy unless the app sent a position. Mid-shift that
+   * makes the first leg pessimistic — the driver is out on the road, not back
+   * at the counter — and the honest fix is a location fix from the app, which
+   * the endpoint already accepts.
+   *
+   * Costs a Routes API call, so it is a request the app makes deliberately,
+   * never something folded into the 30-second queue poll.
+   */
+  async routeEta(date: string, origin?: GeoPoint): Promise<RouteEtaView> {
+    // Slightly ahead of now: the provider refuses a departure that is not in
+    // the future, and one measured at "now" has already gone stale in flight.
+    const departure = new Date(Date.now() + DEPARTURE_BUFFER_SECONDS * 1000);
+    const from: "pharmacy" | "driver" = origin ? "driver" : "pharmacy";
+
+    const active = await this.repo.listQueue(date);
+    const { routable, unestimated } = routableStops(active);
+
+    const org = await this.repo.findOrganizationRouting();
+    const start =
+      origin ??
+      (org.latitude !== null && org.longitude !== null
+        ? { latitude: org.latitude, longitude: org.longitude }
+        : undefined);
+
+    // No pharmacy coordinate means no first leg, and a chain that starts
+    // nowhere cannot be walked. Degrading says so instead of quietly
+    // measuring from stop one and under-reporting the whole run.
+    if (!start || routable.length === 0) {
+      if (!start && routable.length > 0) {
+        this.log.warn(
+          { date },
+          "route eta skipped — the organization has no coordinates to start from",
+        );
       }
-    } catch (error) {
-      this.log.warn(
-        { err: error, provider: optimizer.name, date },
-        "route estimation failed — returning the queue without estimates",
-      );
+      return degradedEta(departure, from, unestimated);
     }
 
-    const queue = await this.getQueue(date);
-    return { ...queue, estimates, degraded };
+    const provider = getTravelTimeProvider();
+
+    try {
+      const measured = await provider.legs({
+        origin: start,
+        waypoints: routable.map((stop) => stop.location),
+        departureTime: departure,
+        dwellSeconds: DWELL_SECONDS,
+      });
+
+      if (measured.degraded) return degradedEta(departure, from, unestimated);
+
+      return accumulateEta({
+        stops: routable,
+        legs: measured.legs,
+        departure,
+        origin: from,
+        unestimated,
+      });
+    } catch (error) {
+      this.log.warn(
+        { err: error, provider: provider.name, date },
+        "route eta failed — returning no estimate",
+      );
+      return degradedEta(departure, from, unestimated);
+    }
   }
 
   // --- transitions ---------------------------------------------------------

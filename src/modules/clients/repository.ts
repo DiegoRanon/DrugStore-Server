@@ -7,6 +7,16 @@ export interface ClientRow {
   name: string;
   address: string;
   phone_number: string;
+  /**
+   * Geocode of `address`, captured when staff picked it from Places. Copied
+   * onto each order at creation, never read back afterwards — an order's
+   * coordinate is a snapshot, like its address.
+   */
+  place_id: string | null;
+  formatted_address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geocoded_at: Date | null;
   notes: string | null;
   is_active: boolean;
   created_at: Date;

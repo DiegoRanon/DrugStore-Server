@@ -38,9 +38,15 @@ export interface AdminOrderView {
   address: string;
   phone_number: string;
   authorized_recipient: string | null;
+  place_id: string | null;
+  formatted_address: string | null;
+  latitude: number | null;
+  longitude: number | null;
   delivery_date: string;
   delivery_window: "AM" | "PM";
   requested_delivery_time: string | null;
+  requested_time_start: string | null;
+  requested_time_end: string | null;
   status: OrderStatus;
   is_priority: boolean;
   sequence_number: number | null;
@@ -77,9 +83,19 @@ export interface ActiveDriverOrderView {
   delivery_date: string;
   delivery_window: "AM" | "PM";
   requested_delivery_time: string | null;
+  requested_time_start: string | null;
+  requested_time_end: string | null;
   patient_name: string;
   address: string;
   phone_number: string;
+  /**
+   * Where the address is, for navigation and for the route the server
+   * ordered. Null when it was never geocoded. Lives on this variant only:
+   * a coordinate identifies a patient's home as precisely as the address
+   * does, so it falls off the same cliff at the same moment.
+   */
+  latitude: number | null;
+  longitude: number | null;
   /** Who may accept the package at the door (domain workflow, scénario A). */
   authorized_recipient: string | null;
   amount_due: number | null;
@@ -139,9 +155,15 @@ export function toAdminOrderView(
     address: row.address,
     phone_number: row.phone_number,
     authorized_recipient: row.authorized_recipient,
+    place_id: row.place_id,
+    formatted_address: row.formatted_address,
+    latitude: row.latitude,
+    longitude: row.longitude,
     delivery_date: row.delivery_date,
     delivery_window: row.delivery_window,
     requested_delivery_time: row.requested_delivery_time,
+    requested_time_start: row.requested_time_start,
+    requested_time_end: row.requested_time_end,
     status: row.status,
     is_priority: row.is_priority,
     sequence_number: row.sequence_number,
@@ -205,9 +227,13 @@ export function toDriverOrderView(
     delivery_date: row.delivery_date,
     delivery_window: row.delivery_window,
     requested_delivery_time: row.requested_delivery_time,
+    requested_time_start: row.requested_time_start,
+    requested_time_end: row.requested_time_end,
     patient_name: row.patient_name,
     address: row.address,
     phone_number: row.phone_number,
+    latitude: row.latitude,
+    longitude: row.longitude,
     authorized_recipient: row.authorized_recipient,
     amount_due: row.amount_due,
     payment_status: row.payment_status,

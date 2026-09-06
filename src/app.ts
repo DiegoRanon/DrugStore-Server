@@ -19,6 +19,7 @@ import driverRosterRoutes from "./modules/drivers/routes.js";
 import internalRoutes from "./modules/internal/routes.js";
 import inviteRoutes from "./modules/invites/routes.js";
 import orderRoutes from "./modules/orders/routes.js";
+import placesRoutes from "./modules/places/routes.js";
 import authPlugin from "./plugins/auth.js";
 import errorHandlerPlugin from "./plugins/errorHandler.js";
 import requestIdPlugin from "./plugins/requestId.js";
@@ -40,6 +41,13 @@ const REDACTED_PATHS = [
   "*.patient_name",
   "*.address",
   "*.phone_number",
+  // A coordinate identifies a home at least as precisely as its address, and
+  // the standardized address and place id both resolve straight back to it.
+  // They are the same class of secret and are redacted as one.
+  "*.latitude",
+  "*.longitude",
+  "*.place_id",
+  "*.formatted_address",
   // Who may accept the package, and the driver's free-text explanation of a
   // failed delivery — both routinely name a person.
   "*.authorized_recipient",
@@ -129,6 +137,20 @@ export async function buildApp(): Promise<FastifyInstance> {
         },
       },
       security: [{ bearerAuth: [] }],
+      tags: [
+        { name: "auth", description: "Sessions and account management" },
+        { name: "clients", description: "Saved patients" },
+        { name: "orders", description: "Admin order management and routing" },
+        { name: "drivers", description: "Driver roster" },
+        { name: "driver", description: "The driver app's own surface" },
+        {
+          name: "places",
+          description:
+            "Address standardization, brokered so provider credentials stay on the server",
+        },
+        { name: "invites", description: "Organization invite codes" },
+        { name: "internal", description: "Operational endpoints" },
+      ],
     },
     transform: jsonSchemaTransform,
   });
@@ -149,6 +171,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await fastify.register(inviteRoutes, { prefix: "/v1/invites" });
   await fastify.register(clientRoutes, { prefix: "/v1/clients" });
   await fastify.register(orderRoutes, { prefix: "/v1/orders" });
+  await fastify.register(placesRoutes, { prefix: "/v1/places" });
   await fastify.register(driverRosterRoutes, { prefix: "/v1/drivers" });
   await fastify.register(driverRoutes, { prefix: "/v1/driver" });
   await fastify.register(internalRoutes, { prefix: "/v1/internal" });

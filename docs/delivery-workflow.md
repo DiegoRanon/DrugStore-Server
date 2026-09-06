@@ -64,6 +64,12 @@ assignment would invert the real sequence.
   (`422 ORDER_NOT_EDITABLE`). Once a driver holds the bags, changing the address
   would mean the delivery being performed no longer matches its record.
 - **Reassignment is allowed at any non-terminal status** and nulls `sequence_number`.
+- **The route is a suggestion; priority is not.** Optimization writes
+  `sequence_number`, but the queue is sorted `is_priority DESC` ahead of it, so
+  a flagged stop leads regardless of what the optimizer decided. See
+  "Route optimization" in `api-contracts.md`.
+- **A stop with no coordinates is never dropped from a route**, only appended.
+  An address Google cannot resolve is still a package in the van.
 
 ## Four status sets, and why they are not synonyms
 

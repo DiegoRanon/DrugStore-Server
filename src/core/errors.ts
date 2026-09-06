@@ -154,6 +154,24 @@ const CONSTRAINT_ERRORS: Record<string, () => AppError> = {
       "INTERNAL_ERROR",
       "Duplicate route position for this driver and date",
     ),
+  // Both are validated in Zod before they ever reach Postgres, so a hit here
+  // is a caller that bypassed the schema or a bug in it — 400 rather than
+  // 500, because the request is still the thing that is wrong.
+  chk_orders_coordinates_paired: () =>
+    new AppError(
+      "VALIDATION_FAILED",
+      "Latitude and longitude must be provided together and be in range",
+    ),
+  chk_clients_coordinates_paired: () =>
+    new AppError(
+      "VALIDATION_FAILED",
+      "Latitude and longitude must be provided together and be in range",
+    ),
+  chk_orders_requested_time_range: () =>
+    new AppError(
+      "VALIDATION_FAILED",
+      "A delivery time range needs both a start and an end, and must end after it starts",
+    ),
   idx_invoice_line_items_order: () =>
     new AppError(
       "INVOICE_ALREADY_ISSUED",

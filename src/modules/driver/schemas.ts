@@ -34,9 +34,19 @@ const activeStopSchema = z.object({
   delivery_date: z.string(),
   delivery_window: z.enum(["AM", "PM"]),
   requested_delivery_time: z.string().nullable(),
+  requested_time_start: z.string().nullable(),
+  requested_time_end: z.string().nullable(),
   patient_name: z.string(),
   address: z.string(),
   phone_number: z.string(),
+  /**
+   * Where the address is, for the Navigate action and for the route the
+   * server ordered. Null when the address was never standardized through
+   * Places. Present on this variant only — a coordinate is PII of the same
+   * kind as the address, and falls off the same cliff at the same moment.
+   */
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
   authorized_recipient: z.string().nullable(),
   amount_due: z.number().nullable(),
   payment_status: z.enum(["paid", "unpaid"]),
@@ -130,6 +140,51 @@ export const optimizeBodySchema = z.object({
       longitude: z.number().min(-180).max(180),
     })
     .optional(),
+});
+
+/**
+ * Traffic-aware ETA for the run as it currently stands.
+ *
+ * Same body as optimize, deliberately: both answer "about the rest of my
+ * day", and both take the driver's position when the app has one. Unlike
+ * optimize, this one writes nothing.
+ */
+export const etaBodySchema = z.object({
+  date: dateSchema.optional(),
+  current_location: z
+    .object({
+      latitude: z.number().min(-90).max(90),
+      longitude: z.number().min(-180).max(180),
+    })
+    .optional(),
+});
+
+export const etaResponseSchema = z.object({
+  departure_time: z.string(),
+  /** Where the chain starts. "pharmacy" unless the app sent a position. */
+  origin: z.enum(["pharmacy", "driver"]),
+  stops: z.array(
+    z.object({
+      order_id: z.string().uuid(),
+      /** Drive from the previous point on the chain to this stop. */
+      duration_seconds: z.number(),
+      distance_meters: z.number(),
+      /** Predicted arrival, ISO 8601. */
+      arrival_time: z.string(),
+    }),
+  ),
+  /** Driving plus time at each door, start to finish. */
+  total_duration_seconds: z.number(),
+  total_distance_meters: z.number(),
+  /** When the last package is predicted to change hands, ISO 8601. */
+  finish_time: z.string(),
+  /** Stops with no coordinates, left out of the chain but still on the list. */
+  unestimated_order_ids: z.array(z.string().uuid()),
+  /**
+   * True when no estimate could be produced. The app shows nothing rather
+   * than a number a driver would plan an afternoon around.
+   */
+  degraded: z.boolean(),
 });
 
 /** Manual reordering — the driver's own route, not the optimizer's. */
