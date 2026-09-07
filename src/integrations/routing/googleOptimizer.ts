@@ -90,10 +90,17 @@ interface OptimizeToursResponse {
   skippedShipments?: { index?: number; label?: string }[];
 }
 
+/**
+ * Route Optimization takes a bare `google.type.LatLng` for `arrivalLocation`,
+ * `startLocation` and `endLocation`. There is no `latLng` wrapper here — that
+ * belongs to a Waypoint, which is what the Routes API adapter next door builds
+ * for a different endpoint. Sending the wrapped shape is rejected with a 400
+ * `Unknown name "latLng" ... Cannot find field`, which the service turns into
+ * a degraded route, so the mix-up looks like a provider outage rather than a
+ * malformed request.
+ */
 function point(location: GeoPoint) {
-  return {
-    latLng: { latitude: location.latitude, longitude: location.longitude },
-  };
+  return { latitude: location.latitude, longitude: location.longitude };
 }
 
 /** Protobuf durations arrive as "123.45s". */
