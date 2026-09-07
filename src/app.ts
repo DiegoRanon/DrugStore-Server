@@ -19,6 +19,7 @@ import driverRosterRoutes from "./modules/drivers/routes.js";
 import internalRoutes from "./modules/internal/routes.js";
 import inviteRoutes from "./modules/invites/routes.js";
 import orderRoutes from "./modules/orders/routes.js";
+import organizationRoutes from "./modules/organizations/routes.js";
 import placesRoutes from "./modules/places/routes.js";
 import authPlugin from "./plugins/auth.js";
 import errorHandlerPlugin from "./plugins/errorHandler.js";
@@ -172,6 +173,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await fastify.register(clientRoutes, { prefix: "/v1/clients" });
   await fastify.register(orderRoutes, { prefix: "/v1/orders" });
   await fastify.register(placesRoutes, { prefix: "/v1/places" });
+  await fastify.register(organizationRoutes, { prefix: "/v1/organization" });
   await fastify.register(driverRosterRoutes, { prefix: "/v1/drivers" });
   await fastify.register(driverRoutes, { prefix: "/v1/driver" });
   await fastify.register(internalRoutes, { prefix: "/v1/internal" });

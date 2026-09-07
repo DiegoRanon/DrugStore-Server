@@ -72,6 +72,8 @@ client — you will never see it.
 | `POST /v1/orders/route/optimize` | `{ date, driver_id, time_range? }` — sequence one driver's day. See "Route optimization" below. |
 | `GET /v1/places/autocomplete?q=&session_token=` | Address suggestions. Admin only. |
 | `GET /v1/places/{place_id}?session_token=` | Resolve a suggestion to a standardized address and coordinates. Admin only. |
+| `GET /v1/organization/` | The signed-in admin's pharmacy, including the depot coordinate. |
+| `PATCH /v1/organization/` | Set the pharmacy address and depot coordinate. Admin only. |
 
 `GET /v1/orders` also accepts `from`, `to`, and `is_priority`.
 
@@ -101,6 +103,38 @@ driver on one date — and share one implementation
 | Dashboard | `POST /v1/orders/route/optimize` | Any driver in the org, from `driver_id` |
 
 Whichever ran last wins, which is the intent: the later actor knows more.
+
+### The depot is the pharmacy's own coordinate
+
+Both entry points solve the route from `organizations.latitude/longitude`: it
+is the vehicle's `startLocation` (unless the driver app sent a live position)
+and always its `endLocation`, because undelivered packages have to come back
+before the return deadline. It is also the origin `GET /v1/driver/queue/eta`
+measures its first leg from.
+
+`PATCH /v1/organization/` is what writes it, from the same Places pick the
+order form uses:
+
+```json
+{
+  "address": "1 rue Victor Hugo, Fort-de-France",
+  "place_id": "ChIJ...",
+  "formatted_address": "1 Rue Victor Hugo, 97200 Fort-de-France, Martinique",
+  "latitude": 14.6015,
+  "longitude": -61.0742
+}
+```
+
+The geocode is written as one unit with the address: sending an address with
+no coordinates **clears** the depot rather than leaving a stale one behind. A
+depot pointing at the pharmacy's previous building is worse than none, because
+nothing in the route output would look wrong.
+
+With no depot stored, neither caller errors — the optimizer solves an
+unanchored open tour that may start at any stop, and the ETA endpoint returns
+`degraded: true` with the log line `route eta skipped — the organization has
+no coordinates to start from`. Both are silent by design, so the dashboard's
+Settings page warns when the coordinate is missing.
 
 ### Addresses become coordinates once, at order creation
 

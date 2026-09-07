@@ -4669,6 +4669,215 @@
         }
       }
     },
+    "/v1/organization/": {
+      "get": {
+        "summary": "The signed-in admin's pharmacy",
+        "tags": [
+          "organization"
+        ],
+        "description": "Includes the depot coordinate. A null latitude means routes are not anchored at the pharmacy and driver ETAs degrade.",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "address": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "place_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "formatted_address": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "latitude": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "longitude": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "geocoded_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    },
+                    "phone": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "email": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "locale": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "address",
+                    "place_id",
+                    "formatted_address",
+                    "latitude",
+                    "longitude",
+                    "geocoded_at",
+                    "phone",
+                    "email",
+                    "timezone",
+                    "locale"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Set the pharmacy address and depot coordinate",
+        "tags": [
+          "organization"
+        ],
+        "description": "The geocode is written as one unit with the address: sending an address with no coordinates clears the depot rather than leaving a stale one behind.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "address": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "nullable": true
+                  },
+                  "place_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255,
+                    "nullable": true
+                  },
+                  "formatted_address": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "nullable": true
+                  },
+                  "latitude": {
+                    "type": "number",
+                    "minimum": -90,
+                    "maximum": 90,
+                    "nullable": true
+                  },
+                  "longitude": {
+                    "type": "number",
+                    "minimum": -180,
+                    "maximum": 180,
+                    "nullable": true
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "address": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "place_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "formatted_address": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "latitude": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "longitude": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "geocoded_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    },
+                    "phone": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "email": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "locale": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "address",
+                    "place_id",
+                    "formatted_address",
+                    "latitude",
+                    "longitude",
+                    "geocoded_at",
+                    "phone",
+                    "email",
+                    "timezone",
+                    "locale"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/drivers/": {
       "get": {
         "summary": "List drivers in this organization",
