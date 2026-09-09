@@ -194,6 +194,22 @@ Read the response:
   are now real. With the fake optimizer this field is absent entirely, because
   an adapter that cannot measure reports nothing rather than guessing.
 
+### When `degraded: true` is not a credentials problem
+
+Two request-shape bugs produced exactly the same symptom as an outage, and
+both are worth recognising in a log line before reaching for the console:
+
+| Log line contains | Cause |
+| --- | --- |
+| `Unknown name "latLng" ... Cannot find field` | Locations were wrapped as a Waypoint. Route Optimization takes a bare `google.type.LatLng`; only the Routes API wraps. |
+| `outside global time window` | The model carried no `globalStartTime`/`globalEndTime`. The default global window starts at the Unix epoch, so any real delivery promise falls outside it and fails the whole request. |
+
+Both are fixed in `googleOptimizer.ts` and covered by
+`test/unit/googleOptimizer.test.ts`. They are recorded here because the
+graceful degradation that keeps a driver working also hides which of these is
+happening: the response is `degraded: true` either way, and only the log says
+why.
+
 If a stop comes back in `unroutable_order_ids`, that is not a credentials
 problem: it means the address was never standardized through Places, so it has
 no coordinate to route. Those stops are appended to the end of the sequence

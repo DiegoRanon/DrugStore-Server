@@ -76,6 +76,51 @@ const PRIORITY_SKIP_PENALTY = 10_000_000;
 /** Minutes assumed at the door: park, walk up, hand over, get a signature. */
 const VISIT_DURATION_SECONDS = 300;
 
+/**
+ * How far the model's global window is opened either side of the promises.
+ *
+ * The solver rejects any visit window that falls outside the model's global
+ * window, and with no global window set it defaults to one that begins at the
+ * Unix epoch — so a single real delivery promise fails the whole request with
+ * `outside global time window`. The window is therefore derived from the
+ * promises themselves, and padded, because the global window has to contain
+ * more than the visits: the driver leaves the pharmacy before the first window
+ * opens and gets back after the last one closes, and both legs live inside it.
+ * Padding only creates room — the per-shipment windows still decide when a
+ * patient is actually visited.
+ */
+const GLOBAL_WINDOW_PADDING_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * The model-level window spanning every promise in the run.
+ *
+ * Returns nothing when no stop carries a promise: a run of plain stops solves
+ * fine against the default window, and inventing a global window for it would
+ * constrain a request that has no need of one.
+ */
+function globalWindow(stops: RouteStop[]): {
+  globalStartTime?: string;
+  globalEndTime?: string;
+} {
+  let earliest = Number.POSITIVE_INFINITY;
+  let latest = Number.NEGATIVE_INFINITY;
+
+  for (const stop of stops) {
+    if (!stop.timeWindow) continue;
+    const start = Date.parse(stop.timeWindow.start);
+    const end = Date.parse(stop.timeWindow.end);
+    if (Number.isFinite(start)) earliest = Math.min(earliest, start);
+    if (Number.isFinite(end)) latest = Math.max(latest, end);
+  }
+
+  if (!Number.isFinite(earliest) || !Number.isFinite(latest)) return {};
+
+  return {
+    globalStartTime: new Date(earliest - GLOBAL_WINDOW_PADDING_MS).toISOString(),
+    globalEndTime: new Date(latest + GLOBAL_WINDOW_PADDING_MS).toISOString(),
+  };
+}
+
 interface OptimizeToursResponse {
   routes?: {
     visits?: {
@@ -164,6 +209,7 @@ export class GoogleRouteOptimizer implements RouteOptimizer {
 
     const body = {
       model: {
+        ...globalWindow(routable),
         shipments: routable.map((stop) => ({
           // The order id rides along as a label so a skipped shipment can be
           // identified without relying on index arithmetic.
