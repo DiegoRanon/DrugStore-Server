@@ -13,7 +13,7 @@ import { runMigrations } from "../../src/db/migrator.js";
 export default async function globalSetup(): Promise<void> {
   const testUrl =
     process.env.TEST_DATABASE_URL ??
-    "postgres://drugstore:drugstore@localhost:5433/drugstore_test";
+    "postgres://medibus:medibus@localhost:5433/medibus_test";
 
   const parsed = new URL(testUrl);
   const dbName = parsed.pathname.replace(/^\//, "");

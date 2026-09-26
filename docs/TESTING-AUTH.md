@@ -45,8 +45,8 @@ All use the password `DevPassword123!`.
 | --- | --- | --- |
 | `admin@stlaurent.example.ca` | admin | Pharmacie Saint-Laurent |
 | `driver@stlaurent.example.ca` | driver | Pharmacie Saint-Laurent |
-| `admin@riverside.example.ca` | admin | Riverside Drugstore |
-| `driver@riverside.example.ca` | driver | Riverside Drugstore |
+| `admin@riverside.example.ca` | admin | Riverside Medibus |
+| `driver@riverside.example.ca` | driver | Riverside Medibus |
 
 Two organizations exist on purpose: isolation is the invariant most worth checking, and it cannot be checked against a single tenant.
 
@@ -214,8 +214,8 @@ done
 ⚠️ A separate per-IP limit of **10 login requests per minute** sits in front of this. From one machine that limit is tighter and will fire first, giving `RATE_LIMITED` instead of `LOGIN_THROTTLED`. To see the per-email control on its own, clear the IP counters first:
 
 ```bash
-docker exec drugstore-redis redis-cli --scan --pattern 'ratelimit:*' \
-  | xargs -r docker exec drugstore-redis redis-cli DEL
+docker exec medibus-redis redis-cli --scan --pattern 'ratelimit:*' \
+  | xargs -r docker exec medibus-redis redis-cli DEL
 ```
 
 ---
@@ -223,7 +223,7 @@ docker exec drugstore-redis redis-cli --scan --pattern 'ratelimit:*' \
 ## 5. Checking the database directly
 
 ```bash
-docker exec -it drugstore-postgres psql -U drugstore -d drugstore
+docker exec -it medibus-postgres psql -U medibus -d medibus
 ```
 
 ```sql
@@ -282,5 +282,5 @@ catch { $_.ErrorDetails.Message }
 
 - [TESTING-ORDERS.md](TESTING-ORDERS.md) — clients, orders, and the state machine (Phase 3)
 - [TESTING-DRIVER.md](TESTING-DRIVER.md) — driver queue, transitions, payment, cooler check, idempotency (Phase 4)
-- `npm test` — the Vitest suite PRD §10 calls non-negotiable: organization isolation across every authenticated route, the full state-machine matrix, and the driver PII serializers. It runs against its own `drugstore_test` database and never touches your development data.
+- `npm test` — the Vitest suite PRD §10 calls non-negotiable: organization isolation across every authenticated route, the full state-machine matrix, and the driver PII serializers. It runs against its own `medibus_test` database and never touches your development data.
 - `npm run verify` — both black-box HTTP suites in one go.

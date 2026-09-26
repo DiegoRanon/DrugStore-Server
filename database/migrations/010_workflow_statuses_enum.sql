@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Migration 010 — scheduled and returned_to_pharmacy statuses (enum only)
 --
--- The client's domain workflow (drugstore-driver-app/docs/Plans/domain_workflow.md)
+-- The client's domain workflow (medibus-driver-app/docs/Plans/domain_workflow.md)
 -- describes two stages the four-state lifecycle cannot express:
 --
 --   1. "L'admin prépare digitalement la liste … La commande apparait ensuite

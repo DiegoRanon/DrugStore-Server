@@ -5,7 +5,7 @@ Source of truth for the order state machine. The implementation is
 this file is the bug.
 
 This models the pharmacy's actual process, described by the client in
-`drugstore-driver-app/docs/Plans/domain_workflow.md`.
+`medibus-driver-app/docs/Plans/domain_workflow.md`.
 
 ## The states
 

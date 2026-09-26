@@ -1,5 +1,5 @@
 -- ============================================================================
--- Drugstore Delivery App (B2B) — MVP Database Schema
+-- Medibus Delivery App (B2B) — MVP Database Schema
 -- PostgreSQL
 --
 -- Scope: logistics only. No medical, pharmaceutical, or prescription data
@@ -17,10 +17,10 @@ CREATE TYPE user_role AS ENUM ('admin', 'driver');
 CREATE TYPE delivery_window AS ENUM ('AM', 'PM');
 
 CREATE TYPE order_status AS ENUM (
-    'in_pharmacy',   -- created, waiting at the drugstore
+    'in_pharmacy',   -- created, waiting at the medibus
     'picked_up',     -- "prise en charge" - driver has the package
     'completed',     -- delivered, PoD confirmed
-    'returned'       -- patient unavailable; package brought back to the drugstore
+    'returned'       -- patient unavailable; package brought back to the medibus
 );
 
 CREATE TYPE payment_status AS ENUM ('paid', 'unpaid');
@@ -32,7 +32,7 @@ CREATE TYPE notification_channel AS ENUM ('sms', 'email');
 CREATE TYPE notification_status AS ENUM ('queued', 'sent', 'failed');
 
 -- ----------------------------------------------------------------------------
--- ORGANIZATIONS (drugstores / pharmacies — the B2B clients)
+-- ORGANIZATIONS (medibuss / pharmacies — the B2B clients)
 -- ----------------------------------------------------------------------------
 
 CREATE TABLE organizations (
@@ -242,7 +242,7 @@ CREATE INDEX idx_notifications_order ON notifications(order_id);
 --    the queue changes and isn't meant as a permanent record.
 --
 -- 4. 'returned' is terminal, same as 'completed'. It means the patient was
---    unavailable and the physical package went back to the drugstore; it is
+--    unavailable and the physical package went back to the medibus; it is
 --    never a step on the way to 'completed'. A second delivery attempt is a
 --    NEW order, which keeps order_status_events readable as one attempt per
 --    order. Reporting convention: success rate = completed / (completed +

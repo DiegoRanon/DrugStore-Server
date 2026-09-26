@@ -1,8 +1,8 @@
 # Database Schema Reference
 
-PostgreSQL schema for the Drugstore Delivery B2B server, as of migration `013_driver_notifications`.
+PostgreSQL schema for the Medibus Delivery B2B server, as of migration `013_driver_notifications`.
 
-**Source of truth:** the SQL files in `database/migrations/`. This document is a human-readable snapshot of the applied result (base schema `drugstore_delivery_schema.sql` plus migrations `001`–`013`). The migrator also creates `schema_migrations`.
+**Source of truth:** the SQL files in `database/migrations/`. This document is a human-readable snapshot of the applied result (base schema `medibus_delivery_schema.sql` plus migrations `001`–`013`). The migrator also creates `schema_migrations`.
 
 **Scope:** logistics only. No medical, pharmaceutical, or prescription data is modeled.
 
@@ -77,7 +77,7 @@ Created by the migrator (`src/db/migrator.ts`), not by a `.sql` file.
 
 ### `organizations`
 
-Drugstores / pharmacies — the B2B tenants.
+Medibuss / pharmacies — the B2B tenants.
 
 | Column | Type | Null | Default | Notes |
 | --- | --- | --- | --- | --- |
@@ -626,7 +626,7 @@ That cliff is **not** the terminal set. It is `PII_VISIBLE_STATUSES = (in_pharma
 
 | File | Effect |
 | --- | --- |
-| `drugstore_delivery_schema.sql` | Base schema (recorded as `000_base_schema`). Includes `returned` status. |
+| `medibus_delivery_schema.sql` | Base schema (recorded as `000_base_schema`). Includes `returned` status. |
 | `001_add_returned_order_status.sql` | Legacy-only: `returned` enum + `returned_at`. Baselined on fresh installs. |
 | `002_cancelled_status_enum.sql` | Adds `cancelled` to `order_status`. Runs outside a transaction. |
 | `003_cancelled_status_columns.sql` | `orders.cancelled_at` + terminal-timestamp constraint. |

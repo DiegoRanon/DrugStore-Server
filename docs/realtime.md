@@ -104,7 +104,7 @@ missed — a dropped connection, a Redis blip, a fail-open publish. A poll canno
 
 The driver app therefore keeps its poll and only widens it while connected: 30 s
 disconnected, 120 s connected (`src/queue/use-queue.ts` in
-`drugstore-driver-app`). It is never disabled.
+`medibus-driver-app`). It is never disabled.
 
 ## Operations
 

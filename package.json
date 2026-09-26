@@ -1,7 +1,7 @@
 {
-  "name": "drugstore-server",
+  "name": "medibus-server",
   "version": "1.0.0",
-  "description": "Drugstore Delivery App B2B — centralized API and real-time services",
+  "description": "Medibus Delivery App B2B — centralized API and real-time services",
   "type": "module",
   "main": "dist/server.js",
   "engines": {

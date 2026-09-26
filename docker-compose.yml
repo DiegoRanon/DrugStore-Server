@@ -1,25 +1,25 @@
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: drugstore-postgres
+    container_name: medibus-postgres
     environment:
-      POSTGRES_USER: drugstore
-      POSTGRES_PASSWORD: drugstore
-      POSTGRES_DB: drugstore
+      POSTGRES_USER: medibus
+      POSTGRES_PASSWORD: medibus
+      POSTGRES_DB: medibus
     # 5433 on the host: 5432 is commonly taken by another local Postgres.
     ports:
       - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U drugstore"]
+      test: ["CMD-SHELL", "pg_isready -U medibus"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   redis:
     image: redis:7-alpine
-    container_name: drugstore-redis
+    container_name: medibus-redis
     ports:
       - "6379:6379"
     healthcheck:

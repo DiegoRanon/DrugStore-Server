@@ -2,7 +2,7 @@
 -- Migration 001 — add the 'returned' order status
 --
 -- Only needed if the schema has ALREADY been applied to a database. For a
--- fresh install, drugstore_delivery_schema.sql now contains these changes.
+-- fresh install, medibus_delivery_schema.sql now contains these changes.
 --
 -- IMPORTANT: run the two steps as SEPARATE transactions. PostgreSQL does not
 -- allow a newly added enum value to be used in the same transaction that

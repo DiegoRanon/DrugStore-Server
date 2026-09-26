@@ -1,6 +1,6 @@
 # PRD — Centralized Server (Node.js)
 
-**Product:** Drugstore Delivery App B2B
+**Product:** Medibus Delivery App B2B
 **Component:** Backend API + real-time services
 **Status:** Development Planning
 **Version:** 0.2 (MVP) — `returned` order status added to the schema
@@ -38,7 +38,7 @@ The centralized server is the single source of truth for the platform. It owns a
 | ---------- | --------------------------------- | ---------------------------------------------------------- |
 | Runtime    | Node.js 20 LTS                    | TypeScript, ESM                                            |
 | Framework  | Express or Fastify                | Fastify preferred for schema-based validation + throughput |
-| Database   | PostgreSQL 15+                    | Per `drugstore_delivery_schema.sql`                        |
+| Database   | PostgreSQL 15+                    | Per `medibus_delivery_schema.sql`                        |
 | DB access  | Prisma or Knex + migrations       | Migrations version-controlled, forward-only                |
 | Real-time  | WebSocket (Socket.IO or `ws`)     | Driver location fan-out to admin dashboard                 |
 | Jobs/queue | BullMQ + Redis                    | Notification sends, invoice generation, retention purges   |

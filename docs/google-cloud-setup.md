@@ -25,7 +25,7 @@ rather than reusing the one you have.
 
 In the [Cloud console](https://console.cloud.google.com), pick or create a
 project. The **project ID** is the lowercase string on the dashboard — often
-something like `drugstore-delivery-481203`, not the display name you typed.
+something like `medibus-delivery-481203`, not the display name you typed.
 
 ```bash
 gcloud projects list
@@ -52,12 +52,12 @@ Optimization API**.
 ## 4. Create the service account and grant it a role
 
 ```bash
-gcloud iam service-accounts create drugstore-route-optimizer \
-  --display-name="Drugstore route optimizer" \
+gcloud iam service-accounts create medibus-route-optimizer \
+  --display-name="Medibus route optimizer" \
   --project YOUR_PROJECT_ID
 
-gcloud projects add-iam-policy-binding drugstore-delivery \
-  --member="serviceAccount:drugstore-route-optimizer@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding medibus-delivery \
+  --member="serviceAccount:medibus-route-optimizer@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/routeoptimization.editor"
 ```
 
@@ -99,7 +99,7 @@ for anything shared.
 ### 5b. A key, if your org allows it
 
 ```bash
-gcloud iam service-accounts keys create ./route-optimizer-key.json   --iam-account="drugstore-route-optimizer@YOUR_PROJECT_ID.iam.gserviceaccount.com"
+gcloud iam service-accounts keys create ./route-optimizer-key.json   --iam-account="medibus-route-optimizer@YOUR_PROJECT_ID.iam.gserviceaccount.com"
 ```
 
 If that fails with:

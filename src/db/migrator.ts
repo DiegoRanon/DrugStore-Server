@@ -31,7 +31,7 @@ export const MIGRATIONS_DIR = path.resolve(
   "../../database/migrations",
 );
 
-const BASE_SCHEMA_FILE = "drugstore_delivery_schema.sql";
+const BASE_SCHEMA_FILE = "medibus_delivery_schema.sql";
 const BASE_SCHEMA_NAME = "000_base_schema";
 const NO_TRANSACTION_MARKER = "@migration:no-transaction";
 

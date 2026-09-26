@@ -121,7 +121,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await fastify.register(fastifySwagger, {
     openapi: {
       info: {
-        title: "Drugstore Delivery API",
+        title: "Medibus Delivery API",
         description:
           "B2B pharmacy delivery logistics. Carries no medical, pharmaceutical, or prescription data.",
         version: "1.0.0",
@@ -165,7 +165,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   fastify.get(
     "/health",
     { logLevel: "warn", schema: { hide: true } },
-    async () => ({ status: "ok", service: "drugstore-server" }),
+    async () => ({ status: "ok", service: "medibus-server" }),
   );
 
   await fastify.register(authRoutes, { prefix: "/v1/auth" });

@@ -43,7 +43,7 @@ const FIXTURES: OrgFixture[] = [
     ],
   },
   {
-    name: "Riverside Drugstore",
+    name: "Riverside Medibus",
     slug: "riverside",
     locale: "en",
     deliveryRate: 7.25,

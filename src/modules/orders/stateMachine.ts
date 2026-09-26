@@ -3,7 +3,7 @@ import { AppError } from "../../core/errors.js";
 
 /**
  * The order lifecycle, as the pharmacy actually works
- * (drugstore-driver-app/docs/Plans/domain_workflow.md).
+ * (medibus-driver-app/docs/Plans/domain_workflow.md).
  *
  *   scheduled ──mark_ready──> in_pharmacy ──pickup──> picked_up ──complete──> completed
  *       │                          │                      │                  (terminal)

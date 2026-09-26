@@ -11,7 +11,7 @@ npm test              # 80 unit + integration tests against a real Postgres
 npm run verify        # 81 black-box HTTP checks (auth + orders)
 ```
 
-`npm test` creates and migrates its own `drugstore_test` database, so it never touches your development data. `npm run verify:orders` runs only the Phase 3 half.
+`npm test` creates and migrates its own `medibus_test` database, so it never touches your development data. `npm run verify:orders` runs only the Phase 3 half.
 
 ---
 
@@ -152,7 +152,7 @@ curl -s -X DELETE http://localhost:3000/v1/clients/CLIENT_ID -H "authorization: 
 ## 4. Checking the state machine in the database
 
 ```bash
-docker exec -it drugstore-postgres psql -U drugstore -d drugstore
+docker exec -it medibus-postgres psql -U medibus -d medibus
 ```
 
 ```sql
